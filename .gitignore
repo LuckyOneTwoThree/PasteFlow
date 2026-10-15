@@ -2,6 +2,9 @@
 /target/
 **/target/
 
+# tauri-build generated
+/src-tauri/gen/
+
 # macOS
 .DS_Store
 

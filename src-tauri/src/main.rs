@@ -3,5 +3,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pasteflow_lib::run()
+    pasteflow_lib::run(tauri::generate_context!())
 }

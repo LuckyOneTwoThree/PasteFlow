@@ -14,6 +14,7 @@
 
 use crate::clipboard_owner::{ClipboardOwner, SharedOwner};
 use crate::double_copy::DoubleCopyDetector;
+use crate::format_gate::{stage2, Stage1Verdict, VolumeBytes, VolumeTier};
 use crate::materializer::{MaterializeReason, MaterializeRequest, Materializer, SharedMaterializer};
 use crate::menu_bar::{MenuBarController, MenuAction, SharedMenuBar};
 use crate::native_bridge::{NativeMenuBar, NativeToastPanel};
@@ -123,6 +124,89 @@ impl EngineState {
     pub fn show_toast(&self, req: ToastRequest) {
         self.toast_controller.show(req);
     }
+
+    /// 50ms 主线程 tick 的决策部分 (纯逻辑, 可测):
+    /// 输入剪贴板元数据 -> 是否接管 + 变体路由
+    /// 铁律: G1A-G5 门控 / DLP / 防死循环 全部在挂载前完成
+    pub fn evaluate_takeover(
+        &self,
+        types: &[String],
+        volumes: VolumeBytes,
+        item_count: usize,
+    ) -> TakeoverDecision {
+        let meta = crate::format_gate::metadata_from_types(
+            types.to_vec(),
+            types.to_vec(),
+            item_count,
+        );
+        // Stage 1: 零字节元数据门控
+        match meta.stage1() {
+            Stage1Verdict::Pass => {}
+            other => {
+                return TakeoverDecision {
+                    should_take_over: false,
+                    verdict: other,
+                    tier: VolumeTier::Refuse,
+                }
+            }
+        }
+        // Stage 2: 双层体积分级
+        let tier = stage2(volumes);
+        match tier {
+            VolumeTier::Refuse => TakeoverDecision {
+                should_take_over: false,
+                verdict: Stage1Verdict::Pass,
+                tier,
+            },
+            _ => TakeoverDecision {
+                should_take_over: true,
+                verdict: Stage1Verdict::Pass,
+                tier,
+            },
+        }
+    }
+}
+
+/// 接管决策结果 (供真机 tick 与测试断言)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TakeoverDecision {
+    pub should_take_over: bool,
+    pub verdict: Stage1Verdict,
+    pub tier: VolumeTier,
+}
+
+/// 真机 50ms tick: 读 frontmost + changeCount, 决策接管并挂载 Provider
+/// 注意: 本函数含 objc 调用, 仅在主线程运行 (Tauri setup 注册的定时器)
+#[cfg(target_os = "macos")]
+pub fn tick_takeover(state: &Arc<EngineState>, current_change_count: i64, types: &[String], volumes: VolumeBytes) -> TickOutcome {
+    // 内部写入短路 (挂载/补挂登记的 changeCount 不再触发接管)
+    if state.clipboard_owner.is_internal_write(current_change_count)
+        || state.loop_guard.is_internal_write(current_change_count)
+    {
+        return TickOutcome::InternalWrite;
+    }
+    let decision = state.evaluate_takeover(types, volumes, 1);
+    if !decision.should_take_over {
+        return TickOutcome::Skipped(decision);
+    }
+    // 防死循环: 快照反向匹配
+    if state.loop_guard.register_snapshot(current_change_count as u64) {
+        return TickOutcome::LoopSuspected;
+    }
+    TickOutcome::Takeover(decision)
+}
+
+/// tick 结果 (测试断言)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickOutcome {
+    /// 内部写入, 短路
+    InternalWrite,
+    /// 防死循环命中
+    LoopSuspected,
+    /// 门控拒绝 (G1A-G5 / 体积)
+    Skipped(TakeoverDecision),
+    /// 判定接管, 真机随后 mount_provider
+    Takeover(TakeoverDecision),
 }
 
 /// 原生控件持有 (主线程)
@@ -211,5 +295,67 @@ mod tests {
             d.detect("sk-abc123def456ghi789jkl012mno"),
             crate::privacy_guard::DlpAction::SilentGuard
         );
+    }
+
+    // —— P1-15b: evaluate_takeover 决策 (G1A-G5 + 体积分级) ——
+
+    #[test]
+    fn takeover_text_full_passes() {
+        let s = EngineState::new();
+        let d = s.evaluate_takeover(
+            &["public.utf8-plain-text".into()],
+            VolumeBytes { html: 0, rtf: 0, plain: 1024 },
+            1,
+        );
+        assert!(d.should_take_over);
+        assert_eq!(d.tier, VolumeTier::FullTakeover);
+    }
+
+    #[test]
+    fn takeover_private_object_g1a_blocked() {
+        let s = EngineState::new();
+        let d = s.evaluate_takeover(
+            &["com.todesktop.draft".into()],
+            VolumeBytes { html: 0, rtf: 0, plain: 0 },
+            1,
+        );
+        assert!(!d.should_take_over);
+        assert_eq!(d.verdict, Stage1Verdict::PrivateObject);
+    }
+
+    #[test]
+    fn takeover_oversize_refused() {
+        let s = EngineState::new();
+        let d = s.evaluate_takeover(
+            &["public.utf8-plain-text".into()],
+            VolumeBytes { html: 300 * 1024, rtf: 0, plain: 0 },
+            1,
+        );
+        assert!(!d.should_take_over);
+        assert_eq!(d.tier, VolumeTier::Refuse);
+    }
+
+    #[test]
+    fn takeover_light_tier_still_takes_over() {
+        let s = EngineState::new();
+        let d = s.evaluate_takeover(
+            &["public.html".into()],
+            VolumeBytes { html: 100 * 1024, rtf: 0, plain: 0 },
+            1,
+        );
+        assert!(d.should_take_over);
+        assert_eq!(d.tier, VolumeTier::LightPlainOnly);
+    }
+
+    #[test]
+    fn takeover_multi_item_blocked() {
+        let s = EngineState::new();
+        let d = s.evaluate_takeover(
+            &["public.utf8-plain-text".into()],
+            VolumeBytes { html: 0, rtf: 0, plain: 8 },
+            3,
+        );
+        assert!(!d.should_take_over);
+        assert_eq!(d.verdict, Stage1Verdict::MultiItem);
     }
 }

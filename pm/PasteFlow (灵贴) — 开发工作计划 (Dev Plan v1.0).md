@@ -122,6 +122,23 @@
 5. 15 秒演示视频素材就绪，具备对外验证市场需求的条件。
 6. **止损裁决点**：若 P0/P1-14 发现核心路线存在不可兜底硬伤，暂停 P2/P3 投入，先回到 Master Spec 修订架构。
 
+### 2.3 P1 真机装配实施进度（2026-10-15，P1-15a~e）
+
+**已落地（代码 + 164 测试门禁全绿）**：
+
+| 子任务 | 交付物 | 冒烟结果 |
+|---|---|---|
+| P1-15a objc2 真机 Provider | `paste_provider.rs`：`declare_class!` 实现 `NSPasteboardItemDataProvider`，回调内 `run_with_budget`（R1 catch_unwind + 8ms）+ O(1) frontmost 路由 + Probe Guard + Re-own 代数 | 编译通过；协议方法位于协议 impl 块（类 impl 块会 panic，已修） |
+| P1-15b 接管决策流 | `engine.rs::evaluate_takeover`（G1A–G5 + 双层体积分级）+ `tick_takeover` | 5 项单测覆盖（Pass/G1A/Refuse/Light/MultiItem） |
+| P1-15c tauri 装配 | `lib.rs`：零 Webview（无任何 Window）+ TrayIcon 六项菜单 + 50ms changeCount 轮询 + `run_on_main_thread` 挂载 + 退出走 Materializer 四步铁律（R4） | 编译零警告；`build.rs` + `tauri-build` + `icons/icon.png` 补齐（P1 骨架遗漏） |
+| P1-15d 真机冒烟 | `./target/debug/pasteflow` 真机启动 | ✅ 启动正常；✅ `pbcopy` 后 50ms tick 触发接管（change_count=780）；✅ `pbpaste` 完整读到内容（Provider 供给正确）；✅ Tray 菜单创建无报错；RSS ≈ 87.8MB（**debug 构建**，含 tauri/objc runtime） |
+| P1-15e 文档回写 | 本节 | — |
+
+**冒烟观察项（记入待办）**：
+1. 「NSPasteboard: synchronous promise fulfillment requested from a background thread」×3 告警：消费者（`pbpaste`）在后台请求 Provider 供给所致（与 P0 exp2 现象一致），非阻塞、不影响供给正确性；需在真机回归 checklist 评估是否将 `writeObjects` 后的供给请求统一约束到主线程。
+2. 内存红线 55MB 为 release 构建口径；debug RSS 87.8MB 不构成出口标准判定依据，P1-14 收口时以 `cargo build --release` + `phys_footprint` 为准。
+3. 真机回归 checklist（§2.2 六条出口）中的「Word/微信/Terminal/Slack 四类真机 100% 一致」「9 行 checklist」「15s 演示视频」仍待执行（依赖目标应用装机，承接 P0 遗留 R-1）。
+
 ---
 
 ## 3. P2 — 交互层：Micro-HUD / 历史抽屉 / 主面板（~1.5 周）

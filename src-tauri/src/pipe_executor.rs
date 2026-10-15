@@ -73,17 +73,17 @@ pub struct ServePlan {
 
 /// 首读 Probe Guard 判定输入
 #[derive(Debug, Clone, Copy)]
-pub struct ProbeGuardContext {
+pub struct ProbeGuardContext<'a> {
     /// 首次供给距挂载毫秒数
     pub elapsed_ms: u64,
     /// 首读时前台 bundle
-    pub frontmost_bundle: &'static str,
+    pub frontmost_bundle: &'a str,
     /// 挂载时 (复制事件) 的前台 bundle
-    pub source_bundle: &'static str,
+    pub source_bundle: &'a str,
 }
 
 /// Probe Guard 判定: <150ms & frontmost == SourceApp = 嗅探者抢读 (P0 exp1)
-pub fn is_probe_guard(ctx: &ProbeGuardContext) -> bool {
+pub fn is_probe_guard(ctx: &ProbeGuardContext<'_>) -> bool {
     ctx.elapsed_ms < 150 && ctx.frontmost_bundle == ctx.source_bundle
 }
 

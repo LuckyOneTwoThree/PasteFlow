@@ -79,7 +79,7 @@ impl MenuItemDef {
 }
 
 /// 控制中心事件 (菜单点击 -> 引擎动作)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
     /// 启用/暂停切换
     ToggleEnabled,

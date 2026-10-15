@@ -2323,6 +2323,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tauri",
+ "tauri-build",
  "tokio",
  "tracing",
  "tracing-subscriber",
