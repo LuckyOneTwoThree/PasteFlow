@@ -1,8 +1,8 @@
 # PasteFlow (灵贴) — 产品定义与架构源文档 (Master Spec v1.4)
 
 > **文档状态：** 生效中（Single Source of Truth，Supersedes v1.0 / v1.1 / v1.2 / v1.3）
-> **修订日期：** 2026-10-14
-> **文档性质：** 终态产品定义与系统架构源文档。本文档为经过多轮真机实测与架构攻防审阅后的纯净定稿版（已包含 Step 0 AOT 编译态真机补测数据），可直接作为 UI Spec、Rust TDD、IPC Spec 与代码实现的唯一真源。
+> **修订日期：** 2026-10-15
+> **文档性质：** 终态产品定义与系统架构源文档。本文档为经过多轮真机实测与跨文档契约对齐后的纯净定稿版（已包含 Step 0A AOT 编译态真机实测数据与 Step 0B 跨进程联调准入清单），作为 UI Spec、Rust TDD、IPC Spec 与代码实现的唯一真源。
 > **历史归档：** [[PasteFlow (灵贴) — 产品定义与架构源文档 (Master Spec v1.0)]] · [[PasteFlow (灵贴) — 产品定义与架构源文档 (Master Spec v1.1)]] · [[PasteFlow (灵贴) — 产品定义与架构源文档 (Master Spec v1.2)]] · [[PasteFlow (灵贴) — 产品定义与架构源文档 (Master Spec v1.3)]]
 
 ## 0. 版本演进脉络摘要 (Version Evolution Summary)
@@ -13,7 +13,7 @@
 | **v1.1** | 将自动挡由「拦截 `Ctrl/Cmd+V` 同步重写」重构为「复制时持有 + 按需延迟供给」；淘汰 `arboard` / `rdev`；确立 L2 OCR 框线优先策略与 macOS 优先路线 | 消除全局键盘钩子超时静默卸载、杀软误报与粘贴读取竞态 |
 | **v1.2** | 基于本机实测（附录 A.7–A.11）新增 Tier 0/1 权限分层、`plainTextPolicy` 通道策略、接管前置护栏、provider 8ms 硬超时与快捷键全局登记表 | 解决 AppKit 从 RTF 自动合成纯文本泄漏、legacy 格式静默丢失与主线程回调阻塞问题 |
 | **v1.3** | 取消 1s 定时物化改为生命周期临终物化；建立 `⌘C⌘C` 与 260ms 延迟 Toast 消抖及 Re-own 机制；新增护栏 G5（源文本体积上限）；净化全文表述 | 消除 `t=1s` 粘贴竞态、`changeCount` 三次跳变及 Toast 与 HUD 叠脸冲突 |
-| **v1.4** | **引入「Provider 回调时 O(1) 读取 `FrontmostApp` 启发式分发」**（在 Tier 0 下同时满足 Word 富文本、微信去星号纯文本、Terminal 原始 Markdown 与 Slack 防 HTML 劫持）；**砍掉重型 `FormatPreserver` 源数据拉取改为零开销 `FormatGate` 元数据白名单**（消除触发 Excel/Adobe Promised Data 渲染卡顿）；**重构 DLP 为「默认静默三不保护，绝不篡改粘贴明文」**；**完成 Step 0 AOT 真机补测（附录 A.12）**：根据实测将 **G5 体积上限由 `256KB` 收紧校准为 `64KB`**（`64KB` 下 p95=`3.98ms`，而 `240KB` 达 `8.50ms` 突破预算）、锁定预编译 URL 正则（较 `NSDataDetector` 提速 `68x`），并回填真实 AOT 内存基线 | 彻底理顺架构投入产出比，消除 DLP 误杀导致的卸载风险与源应用复制卡顿，将首版交付周期压缩至 2 周可验证闭环 |
+| **v1.4** | **引入「Provider 回调时 O(1) 读取 `FrontmostApp` 启发式分发」**与 **`HTML + RTF` 双通道同步防劫持抑制**；**升级为两阶段 `FormatGate` 门控**（Stage 1 零读取元数据门控将 **G1 解耦为 G1A 私有复杂对象无条件拦截与 G1B 独立图片拦截**，精准放行 Word/Pages 富文本复制伴生的 TIFF 预览图；Stage 2 建立 **G5 双层体积门控：`≤ 64KB` 全量三通道供给、`64KB ~ 256KB` `LIGHTWEIGHT_TEXT_ONLY` 轻量纯文本降级供给、`> 256KB` 拒绝接管**）；**重构 DLP 为「默认静默三不保护，绝不篡改粘贴明文」**；**完成 Step 0A AOT 真机实测（附录 A.12）** 并与 TDD / UI Spec / IPC Spec 全量对齐 | 彻底理顺架构投入产出比，消除 Word 富文本误拦截、Slack RTF 回退劫持、DLP 误杀与源应用复制卡顿，将首版交付周期压缩至 2 周可验证闭环 |
 
 ## 1. 项目元信息与核心定位 (Project Metadata)
 
@@ -52,12 +52,12 @@
 | 指标项 | 目标值 | 本机 AOT (`-O`) 实测基线与工程约束 |
 |---|---|---|
 | **安装包体积** | `< 10MB` | ✅ Tauri 2.0 Release 实测 exe `9.02MB` / MSI `3.00MB`（不内置离线 OCR 模型权重）。 |
-| **纯核心守护进程内存（Stage 0）** | `< 25MB` | ✅ 实测无窗口核心进程 `phys_footprint = 1.95 MB`，`RSS = 8.02 MB`。 |
-| **v0.1.0 菜单栏 + 原生 Toast 态内存** | `phys_footprint < 55MB` | ✅ 实测初始化 AppKit 与原生 `NonActivatingHUDPanel` 后 `phys_footprint = 47.33 MB`，`RSS = 67.89 MB`。 |
+| **Rust 核心引擎逻辑内存（Stage 0）** | `< 10MB` | ✅ 实测无窗口核心进程 `phys_footprint = 1.95 MB`，`RSS = 8.03 MB`（环形缓冲与连接池增量 `< 5MB`）。 |
+| **v0.1.0 菜单栏 + 原生 Toast 整应用内存** | `phys_footprint < 55MB` | ✅ 实测初始化 AppKit 与原生 `NonActivatingHUDPanel` 后 `phys_footprint = 47.33 MB`（冷态最小 `6.95 MB`），`RSS = 67.89 MB`。 |
 | **v0.1.5 挂载常驻隐藏 `WKWebView` 主进程内存** | `phys_footprint < 65MB` | ✅ 实测挂载并渲染隐藏 `micro-hud` `WKWebView` 后，主进程 `phys_footprint = 53.53 MB`，`RSS = 87.25 MB`（主进程增量仅 **`+6.20 MB`**）。 |
-| **L1 本地转换延迟（`≤ 64KB`）** | `< 5ms`（硬超时 `8ms`） | ✅ 实测常规 Markdown 转 HTML 耗时 **`269 µs`**、转微信纯文本 **`79 µs`**、社媒链接瘦身 **`129 µs`**；`64KB` 满载长文 p50=`2.79ms`、p95=`3.98ms`、max=`4.96ms`。 |
-| **`WindowObserver` 前台应用查询延迟** | `< 1 µs` | ✅ 实测 16 槽环形缓冲 O(1) 读取 p50=**`0.042 µs`**（`42 ns`）；直接调用 `NSWorkspace.frontmostApplication` p50=`0.167 µs`。 |
-| **`FormatGate` G1–G5 门控判定延迟** | `< 5 µs` | ✅ 实测 7 类场景（Excel/Figma/多文件/Legacy/超长文本）耗时 **`0.083 µs – 1.292 µs`**，0 字节源数据拉取。 |
+| **L1 本地转换延迟（双层预算）** | `< 5ms`（硬超时 `8ms`） | ✅ `≤ 64KB` 全量三通道转换：常规 Markdown 转 HTML **`269 µs`**、单遍 UTF-8 转微信纯文本 **`17.12 µs`**、社媒链接瘦身 **`129 µs`**，`64KB` 满载 p50=`2.79ms` / p95=`3.98ms`；`64KB~256KB` `LIGHTWEIGHT_TEXT_ONLY` 模式：实测 `120KB` 长文纯文本净化 p50=**`0.48ms`** / max=**`0.67ms`**。 |
+| **`WindowObserver` 前台应用查询延迟** | `< 1 µs` | ✅ 实测 16 槽 `Arc` 引用环形缓冲 O(1) 零分配读取 p50=**`0.042 µs`**（`42 ns`）；直接调用 `NSWorkspace.frontmostApplication` p50=`0.167 µs`。 |
+| **两阶段 `FormatGate` 门控判定延迟** | `< 5 µs` | ✅ 实测 9 类场景（含 Excel/Figma 拦截、Word 伴生 TIFF 放行、120KB 轻量降级、600KB 拒绝）耗时 **`0.125 µs – 3.416 µs`**，Stage 1 严格 0 字节正文拉取。 |
 | **L2 原生 OCR 延迟（v0.2.0）** | 热态 `< 100ms` | ✅ macOS Vision `.accurate` 热态实测 `52–70ms`；机器级首次调用实测 `13,554ms`，必须后台预热并严禁进入粘贴回调。 |
 
 ## 2. 核心设计原则 (Design Principles)
@@ -77,7 +77,7 @@
 6. **声明式可扩展 (Declarative Extensibility)**
    所有转换能力抽象为 JSON Schema 严格校验的 `PipeRecipe` 协议（`additionalProperties: false`），支持单文件导入导出与自然语言生成。
 7. **宁可不接管，不可破坏原生粘贴 (Never Degrade Native Paste)**
-   任何一次接管剪贴板的决定，都必须以“用户的 `Cmd/Ctrl+V` 体验严格优于或等于不接管”为前提。一旦检测到 Excel/Adobe/Figma 私有对象、多文件复制、超 `64KB` 大文本或接管期间发生并发新复制（TOCTOU），**必须立即放弃接管**，100% 退回系统原生行为。
+   任何一次接管剪贴板的决定，都必须以“用户的 `Cmd/Ctrl+V` 体验严格优于或等于不接管”为前提。一旦检测到 Excel/Adobe/Figma 私有复杂对象（G1A）、纯图片无文本复制（G1B）、多文件复制（G2/G3）、超 `256KB` 巨型文本（G5）或接管期间发生并发新复制（TOCTOU），**必须立即放弃接管**，100% 退回系统原生行为。
 
 ## 3. 核心架构决策：多通道延迟供给与前台启发式路由 (Core Architecture)
 
@@ -102,9 +102,9 @@
      * **命中 IM 纯文本美化白名单**（当前前台应用为微信 `com.tencent.xinWeChat`、企业微信、钉钉、飞书且请求的是 `plainText`）：实时返回**剥离 `#`、`**`、代码块围栏并优化列表缩进的精致纯文本**（实测耗时 `79.21 µs`）。
      * **命中开发者工具或默认兜底**（当前前台应用为 `Terminal`、`iTerm2`、`VSCode`、`Cursor`、`Warp`、`Xcode` 或其他未列入 IM 白名单的应用）：返回**100% 原始无损 Markdown**（实测耗时 `0.25 µs`）。
    * **禁止首次拉取写死缓存**：由于用户可能先贴进微信（需净化版）再切到 Terminal 贴源码（需原始版），`plainText` 通道每次回调均在内存中按当前 `FrontmostApp` 实时选择返回版本。
-3. **`public.html` 富文本通道的防劫持抑制**：
-   * Slack、Discord、VSCode 等基于 Chromium/Electron 的应用在剪贴板存在 `public.html` 时会优先读取 HTML，导致粘贴 Markdown 时产生意外的富文本样式。
-   * 当 `provideDataForType(public.html)` 触发时，若检测到当前 `FrontmostApp` 处于 **「HTML 注入抑制名单（Slack / Discord / VSCode / Cursor / Terminal）」** 中，回调直接返回空回退（实测耗时 `0.08 µs`），使目标应用干净地读取原始文本；仅当 `FrontmostApp` 为 Word、WPS、Pages、飞书文档、Notion 等办公文档应用时，才返回带 `mso-` 样式的转换后 HTML（实测耗时 `269.08 µs`）。
+3. **`public.html` 与 `public.rtf` 富文本双通道同步防劫持抑制**：
+   * Slack、Discord、VSCode 等富文本或 Electron 应用在剪贴板存在富文本通道时会按 `public.html → public.rtf → public.utf8-plain-text` 顺序协商；若仅抑制 `public.html` 而不抑制 `public.rtf`，目标应用会回退读取 RTF 通道，依然造成富文本样式污染。
+   * 因此，当 `provideDataForType(public.html)` 或 `provideDataForType(public.rtf)` 触发时，若检测到当前 `FrontmostApp` 处于 **「富文本注入抑制名单（Slack / Discord / VSCode / Cursor / Terminal / iTerm2）」** 中，**必须同步抑制 `html` 与 `rtf` 两个通道**（默认返回 `nil` 引导目标应用回退读取 `public.utf8-plain-text`，实测耗时 `0.17–0.21 µs`；若 Step 0B 联调发现特定目标应用在收到 `nil` 时未自动回退，则对该 Bundle ID 返回 `<pre>` 转义源码包），仅当 `FrontmostApp` 为 Word、WPS、Pages、飞书文档、Notion 等办公文档应用时才返回富文本排版数据。
 
 ### 3.3 平台底层实现机制
 
@@ -138,7 +138,7 @@
 * **触发条件**：用户在任意应用执行原生 `Cmd/Ctrl + C`，随后在目标应用执行原生 `Cmd/Ctrl + V`。
 * **标准执行时序**：
   1. **源应用事件驱动捕获（Capture）**：通过订阅 `NSWorkspace.didActivateApplicationNotification`（macOS）/ `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`（Windows），维护 16 槽 `(bundleId, processName, timestamp)` 环形缓冲区。当 `50ms` 轮询检测到外部 `changeCount` 自增时，首先通过 macOS 15.4+ `detectPatterns`（若可用）或轻量读取获取文本内容，并回溯复制瞬间的 `SourceApp`（实测复制后 `30ms` 极速切窗仍 100% 精确识别源应用，附录 A.12）。
-  2. **白名单门控与原子接管（Gate & Atomic Own）**：依次执行隐私黑名单过滤（§8.7）与零开销格式门控 `FormatGate` G1–G5 校验（§8.9）。若源剪贴板含 Excel/设计软件私有对象、多文件或文本 `> 64KB`，立即放弃接管；若确认为纯文本/网页文本且命中激活滤镜，在调用 `clearContents()` 前最后一行执行 **TOCTOU 原子校验（`pasteboard.changeCount == snapshotChangeCount`）**，校验通过后注册 `DataProvider` 接管剪贴板。
+  2. **两阶段白名单门控与原子接管（Two-Stage Gate & Atomic Own）**：依次执行隐私黑名单过滤（§8.7）与两阶段格式门控 `FormatGate`（§8.9）：第一阶段仅读取 `types` 元数据与条目数（0 字节正文拉取），拦截 Excel/Figma 私有对象（G1A）、纯图片（G1B）、多文件（G2/G3）与纯 Legacy 格式（G4），同时放行携带伴生 TIFF 预览图的 Word/Pages 富文本；第二阶段读取文本字节长度并分级（`≤ 64KB` 全量多通道供给、`64KB ~ 256KB` `LIGHTWEIGHT_TEXT_ONLY` 纯文本轻量降级、`> 256KB` 放弃接管）。校验通过且命中激活滤镜后，在调用 `clearContents()` 前最后一行执行 **TOCTOU 原子校验（`pasteboard.changeCount == snapshotChangeCount`）**，注册 `DataProvider` 接管剪贴板。
   3. **260ms 消抖微反馈（Debounced Toast）**：接管完成后启动 `260ms` 消抖定时器（避开 `250ms` 的 `⌘C⌘C` 双击窗口）。若未发生第二次复制，则在鼠标右下角浮现无焦点胶囊 Toast（`800ms` 淡出）：
      * `DYNAMIC_BY_TARGET` / `PASSTHROUGH`：`✨ 灵贴已就绪 · Word 贴排版 · 微信去星号 · 终端保源码（双击 ⌘C 还原原文）`
      * `CLEANED`：`✨ 已自动净化剪贴板链接/文本（双击 ⌘C 还原原文）`
@@ -176,7 +176,9 @@
 |---|---|---|---|---|---|
 | **自动挡主链路** | 原生 `⌘C` / `⌘V` | 原生 `Ctrl+C` / `Ctrl+V` | Tier 0 | **v0.1.0** | `50ms` 序列号监听 + DataProvider，零按键拦截 |
 | **双击复制动作 / HUD 呼出** | `⌘C` 双击（`<250ms`） | `Ctrl+C` 双击（`<250ms`） | Tier 0 | **v0.1.0 / v0.1.5** | v0.1.0 触发一键还原原文；v0.1.5 呼出 Micro-HUD |
+| **自动挡全局暂停/恢复** | `⌘⇧P` | `Ctrl+Shift+P` | Tier 0 | **v0.1.0** | 菜单栏与全局热键同步切换（暂停前自动执行临终物化） |
 | **手动挡备选热键** | `⌃⌥V` | `Ctrl+Alt+V` | Tier 0 | **v0.1.0 / v0.1.5** | `RegisterEventHotKey` / `RegisterHotKey`，避开 macOS `⌥V` (`√`) |
+| **显式 DLP 脱敏粘贴** | `⌃⌥D` | `Ctrl+Alt+D` | Tier 0 | **v0.1.0 / v0.1.5** | 检测到 `contains_secret` 时一键将剪贴板密钥替换为 `<REDACTED>` |
 | **历史与贪吃蛇抽屉** | `⌥⇧V` | `Alt+Shift+V` | Tier 0 | **v0.1.5** | 与 `⌃⌥V` / `Ctrl+Alt+V` 完全独立 |
 | **贪吃蛇模式开关** | `⌥⇧S` | `Alt+Shift+S` | Tier 0 | **v0.1.5** | 独立全局热键 |
 | **HUD 内部动作导航** | `1`–`4` / `↩` / `Esc` | `1`–`4` / `↩` / `Esc` | Tier 0 | **v0.1.5** | macOS `NSPanel` 直接收键；Windows 仅在 HUD 可见期挂载临时钩子 |
@@ -186,7 +188,7 @@
 
 ### 5.1 L1：本地闪电引擎 (Deterministic Local Engine)
 
-* **性能与执行边界**：耗时 `< 5ms`（硬超时 `8ms`）；100% 离线零成本；仅处理 `≤ 64KB` 文本（由 Step 0 实测校准，附录 A.12）；内部严禁任何磁盘、网络或数据库写入 I/O。
+* **性能与执行边界**：耗时 `< 5ms`（硬超时 `8ms`）；100% 离线零成本；实行 **G5 双层体积门控**：`≤ 64KB` 执行全量三通道转换（`html` + `rtf` + `plainText`），`64KB ~ 256KB`（如 DeepSeek R1 / Claude 超长代码与长文回复）自动进入 `LIGHTWEIGHT_TEXT_ONLY` 轻量纯文本模式（跳过耗时的完整 HTML/RTF 排版树构建，仅激活 `< 1ms` 的单遍 UTF-8 字节流纯文本净化，实测 `120KB` 耗时仅 `0.48ms`，同时支持通过菜单栏/HUD 手动触发全量富文本转换），`> 256KB` 拒绝接管；内部严禁任何磁盘、网络或数据库写入 I/O。
 * **底层技术实现**：Rust 预编译线性时间正则（`regex` crate + `LazyLock`，**严禁在回调内动态编译正则或调用系统 `NSDataDetector`**——实测预编译正则提取 URL 耗时 `129 µs`，比 `NSDataDetector` 的 `8.77ms` 快 `68x`）、Markdown/HTML AST 解析（`pulldown-cmark`、`scraper`）、URL 解析（`url` crate）。
 * **核心内置滤镜矩阵**：
 
@@ -240,11 +242,11 @@
 | 模块名称 | 选定技术方案 | 核心职责与工程规范 |
 |---|---|---|
 | **1. `ClipboardOwner`** | macOS: `objc2` (`NSPasteboardItemDataProvider`)<br>Win: `windows-rs` (`OleSetClipboard` + `IDataObject`)<br>基础读写: `clipboard-rs` (`0.3.5+` Vendor) | 负责 `50ms`（20Hz）轻量轮询 `changeCount`、接管前原子 CAS 校验（防 TOCTOU）、多通道声明、Provider 强引用保活与所有权丢失清理。在 macOS 15.4+ 上优先调用 `detectPatterns` 做非侵入预检。 |
-| **2. `FormatGate`** | 自研纯元数据门控（0 字节拷贝） | 接管前仅检查 `pasteboard.types` 字符串数组与条目数，执行 **G1–G5 五道护栏**（遇到 Excel/设计软件私有格式、多文件、纯 Legacy 格式或 `> 64KB` 文本立即放弃接管），**绝不拉取源应用的 Promised Data**。 |
-| **3. `WindowObserver`** | `active-win-pos-rs` + `didActivateApplicationNotification` / `SetWinEventHook` | 维护 16 槽进程激活时间戳环形缓冲：① 在复制瞬间回溯 `SourceApp`；② 在粘贴回调触发瞬间 **O(1) 提供当前前台应用 `FrontmostApp`**（耗时 `0.042 µs`）供启发式路由使用。 |
-| **4. `PipeExecutor`** | `regex`（预编译 `LazyLock`）、`pulldown-cmark`、`scraper`、`url` | 执行 L1 转换、置信度门控与 `plainTextPolicy`（含 `DYNAMIC_BY_TARGET` 前台应用分支与 Slack HTML 抑制）路由。 |
-| **5. `CallbackBudget`** | Rust `std::panic::catch_unwind` + `8ms` 计时门控 | 隔离 Objective-C / COM FFI 边界 Panic，监控回调耗时，超时或异常立即回退返回原始文本。 |
-| **6. `Materializer`** | `applicationWillTerminate` + `SIGTERM`/`SIGINT` + Panic Hook | 在进程正常退出或 Panic 时，校验 `changeCount == changeCountAtOwn` 后将当前持有通道同步写为静态剪贴板数据，防止退出后剪贴板变空。 |
+| **2. `FormatGate`** | 自研两阶段门控（Stage 1 零字节读取 + Stage 2 体积分级） | Stage 1 仅检查 `pasteboard.types` 与条目数（区分 `G1A` 私有复杂对象拦截与 `G1B` 独立图片拦截，放行 Word 伴生预览图），**绝不拉取源应用 Promised Data**；Stage 2 按文本长度实行 `≤64KB` 全量 / `64~256KB` 轻量纯文本 / `>256KB` 拒绝。 |
+| **3. `WindowObserver`** | `active-win-pos-rs` + `didActivateApplicationNotification` / `SetWinEventHook` | 维护 16 槽 `Arc<AppActivationRecord>` 环形缓冲：① 在复制瞬间回溯 `SourceApp`；② 在粘贴回调触发瞬间 **O(1) 零内存分配克隆 `FrontmostApp`**（耗时 `0.042 µs`）供启发式路由使用。 |
+| **4. `PipeExecutor`** | `regex`（预编译 `LazyLock`）、`pulldown-cmark`、`scraper`、`url` | 执行 L1 转换、置信度门控与 `plainTextPolicy`（含 `DYNAMIC_BY_TARGET` 前台应用分支与 Slack/VSCode 的 `HTML + RTF` 双通道同步抑制）路由。 |
+| **5. `CallbackBudget`** | Rust `std::panic::catch_unwind` + `8ms` 计时门控 | 隔离 Objective-C / COM FFI 边界 Panic，监控回调耗时并在超预算时回退返回原始文本。 |
+| **6. `Materializer`** | `applicationWillTerminate` + GCD Signal Source (`SIGTERM`/`SIGINT`) + Panic Hook | 在进程正常退出、主线程异步信号处理或暂停自动挡时，校验 `changeCount == changeCountAtOwn` 后将当前持有通道同步写为静态剪贴板数据，严禁在裸 POSIX signal handler 内直接调用 AppKit。 |
 | **7. `DoubleCopyDetector`** | 外部复制差分状态机 | 识别 `< 250ms` 内同 `contentHash` + 同 `SourceApp` 的连续两次外部复制，负责取消 `260ms` 消抖 Toast、触发双击动作并执行二次复制重接管（Re-own）。 |
 | **8. `PrivacyAndLoopGuard`** | `BLAKE3` 环形缓冲 + 进程黑名单 + DLP 识别器 | 过滤内部写入防死循环；拦截密码管理器与 `ConcealedType`；对 `contains_secret` 执行「不入历史库、不进云端 AI、不跨端同步」静默三不保护。 |
 
@@ -260,20 +262,24 @@
        ├─► SourceApp ∈ 密码管理器黑名单 或 含 ConcealedType / ExcludeClipboard ──► [彻底忽略，0 读取]
        │
        ▼
-[2. FormatGate 零开销元数据护栏 (§8.9 G1–G5, 耗时 <2µs)]
-       ├─► 仅读取 pasteboard.types 字符串列表与 pasteboardItems.count (绝不拉取私有二进制数据):
-       │     ├─ G1: 含 Excel / Adobe / Figma / Sketch / TIFF / PDF / RTFD 等重型或私有对象?
-       │     ├─ G2: pasteboardItems.count > 1 (多条目)?
-       │     ├─ G3: 含 public.file-url / NSFilenamesPboardType (文件复制)?
-       │     ├─ G4: 不含 public.utf8-plain-text 且不含 public.html?
-       │     └─ G5: 读取的文本/HTML 字节数 > 64KB?
-       │   (任一命中) ──► [立即放弃接管，100% 保持系统原生剪贴板] + 记录至诊断看板
+[2. FormatGate 两阶段格式护栏 (§8.9, Stage 1 耗时 <2µs, 0 字节二进制拉取)]
+       ├─► Stage 1 (纯元数据检查 pasteboard.types 与 pasteboardItems.count):
+       │     ├─ G1A: 含 Excel / OLE / iWork / Adobe / Figma / Sketch / RTFD 私有复杂对象? ──► [无条件放弃接管]
+       │     ├─ G1B: 含 TIFF / PNG / PDF 且【不含】现代文本通道 (纯图片/截图复制)? ──► [放弃接管]
+       │     │       (注: 若同时含 public.utf8-plain-text / public.html，如 Word 富文本伴生 TIFF 预览，则放行!)
+       │     ├─ G2: pasteboardItems.count > 1 (多条目)? ──► [放弃接管]
+       │     ├─ G3: 含 public.file-url / NSFilenamesPboardType (文件复制)? ──► [放弃接管]
+       │     └─ G4: 不含 public.utf8-plain-text 且不含 public.html? ──► [放弃接管]
+       ├─► Stage 2 (读取 UTF-8 文本后检查字节长度):
+       │     ├─ > 256KB (G5_OVERSIZE) ──► [立即放弃接管，100% 保持系统原生剪贴板]
+       │     ├─ 64KB ~ 256KB ──► 标记为 LIGHTWEIGHT_TEXT_ONLY (仅注册/转换纯文本通道，耗时 <1ms)
+       │     └─ ≤ 64KB ──► 标记为 FULL_MULTI_CHANNEL (全量三通道供给)
        │
        ▼
 [3. Content Analyzer & Silent DLP Shield (§8.7)]
        ├─► 检测到高置信度密钥 (contains_secret: sk-... / 私钥 / 连接串)?
        │     └──► (是) 触发「静默三不保护」: 不入 SQLite 历史、标记禁止进入 L3、不篡改剪贴板 ──► [保持原生粘贴返回]
-       ├─► (否) 正常异步写入 SQLite FTS5 历史库 (仅存 original 原文)
+       ├─► (否) 正常异步写入 SQLite FTS5 (trigram) 历史库 (仅存 original 原文)
        │
        ▼
 [4. DoubleCopyDetector (§3.4)]
@@ -287,19 +293,21 @@
        │     └──► (否，期间发生了并发新复制) ──► [中止本次接管，重新处理新 changeCount]
        │
        ▼
-[6. ★ OWN THE PASTEBOARD (持有剪贴板，声明三通道) ★]
-       ├─► 注册 DataProvider 声明: public.html + public.rtf + public.utf8-plain-text(必选)
+[6. ★ OWN THE PASTEBOARD (持有剪贴板，按 PayloadTier 声明通道) ★]
+       ├─► FULL_MULTI_CHANNEL: 声明 public.html + public.rtf + public.utf8-plain-text(必选)
+       ├─► LIGHTWEIGHT_TEXT_ONLY: 仅声明 public.utf8-plain-text (支持菜单栏/HUD 手动触发全量富文本转换)
        ├─► 记录 ownership.changeCountAtOwn，启动 260ms 消抖 Toast 定时器
        │
        │   ...... (用户在任意目标应用按下原生 Cmd/Ctrl+V，按键零拦截) ......
        ▼
 [7. Heuristic Lazy Provision Callback (宿主请求某通道时同步触发)]
-       │  ⚠️ FFI catch_unwind + 8ms 硬超时；O(1) 读取 WindowObserver 当前前台应用 FrontmostApp (0.042µs)
+       │  ⚠️ FFI catch_unwind + 8ms 预算监控；O(1) 读取 WindowObserver 当前前台应用 FrontmostApp (0.042µs)
        ├─► 请求 html:
-       │     ├─ FrontmostApp ∈ HTML 抑制名单 (Slack/Discord/VSCode/Terminal) ──► 返回 nil (引导回退读纯文本)
+       │     ├─ FrontmostApp ∈ 富文本抑制名单 (Slack/Discord/VSCode/Terminal) ──► 返回 nil (html_suppressed)
        │     └─ 办公文档目标 (Word/WPS/飞书文档/Pages) ──► [L1 <5ms] 返回带 mso- 样式的富文本 HTML
        ├─► 请求 rtf:
-       │     └─ [L1 <5ms] 返回标准排版 RTF
+       │     ├─ FrontmostApp ∈ 富文本抑制名单 (Slack/Discord/VSCode/Terminal) ──► 返回 nil (rtf_suppressed)
+       │     └─ 办公文档目标 ──► [L1 <5ms] 返回标准排版 RTF
        ├─► 请求 plainText:
        │     ├─ 策略为 DYNAMIC_BY_TARGET 且 FrontmostApp ∈ IM 白名单 (微信/企微/钉钉/飞书) 且 Δt ≥ 150ms
        │     │     ──► [L1 <1ms] 返回剥离 # 与 ** 的精致纯文本
@@ -308,9 +316,9 @@
        └─► 超时 / Panic / 异常 ──► 立即回退返回原始文本
        │
        ▼
-[8. 生命周期临终物化 (§8.8)]
-       └─► 进程收到退出信号 (applicationWillTerminate / SIGTERM / SIGINT / Panic Hook):
-             └──► 若 changeCount == changeCountAtOwn ──► 将静态转换结果写入剪贴板后退出
+[8. 生命周期与暂停态安全物化 (§8.8)]
+       └─► 进程收到退出事件 (applicationWillTerminate / GCD SIGTERM·SIGINT / Panic) 或用户暂停自动挡:
+             └──► 若 changeCount == changeCountAtOwn ──► 在主线程将静态数据写回剪贴板后释放 Provider
 ```
 
 ## 7. 核心数据结构与协议定义 (Core Data Schemas)
@@ -333,13 +341,14 @@ export interface ClipboardItem {
     filePaths?: string[];
   };
 
-  /** 零开销格式门控检查结果（§8.9 FormatGate） */
+  /** 两阶段零开销格式门控检查结果（§8.9 FormatGate） */
   formatGate: {
     declaredTypes: string[];       // 源剪贴板声明的 type 字符串列表
     itemCount: number;             // pasteboardItems.count
-    textByteLength: number;        // 文本载荷字节数 (≤ 64KB)
+    textByteLength: number;        // 文本载荷字节数 (≤ 64KB 全量 / 64~256KB 轻量纯文本)
     gatePassed: boolean;           // 是否通过 G1–G5 门控
-    skippedReason?: 'G1_COMPLEX_OBJECT' | 'G2_MULTI_ITEM' | 'G3_FILE_URL' | 'G4_LEGACY_ONLY' | 'G5_OVERSIZE' | 'DLP_SECRET_BYPASS';
+    payloadTier?: 'FULL_MULTI_CHANNEL' | 'LIGHTWEIGHT_TEXT_ONLY';
+    skippedReason?: 'G1A_COMPLEX_OBJECT' | 'G1B_STANDALONE_MEDIA' | 'G2_MULTI_ITEM' | 'G3_FILE_URL' | 'G4_LEGACY_ONLY' | 'G5_OVERSIZE' | 'DLP_SECRET_BYPASS';
   };
 
   /** 复制源上下文（基于窗口激活事件流回溯，§4.1） */
@@ -379,7 +388,7 @@ export interface ClipboardItem {
       timestamp: number;
       channel: 'html' | 'rtf' | 'plainText';
       frontmostBundleId: string;
-      appliedVariant: 'rich_office' | 'im_cleaned_text' | 'raw_passthrough' | 'html_suppressed';
+      appliedVariant: 'rich_office' | 'im_cleaned_text' | 'raw_passthrough' | 'html_suppressed' | 'rtf_suppressed';
       durationMs: number;
     }>;
   };
@@ -388,7 +397,7 @@ export interface ClipboardItem {
 
 ### 7.2 声明式滤镜配方协议 (`PipeRecipe`)
 
-所有内置及社区贡献的滤镜配方均遵循此结构（存放于 `pipes/*.json`），JSON Schema 强制开启 `additionalProperties: false`：
+所有内置及社区贡献的滤镜配方均遵循此结构（存放于 `pipes/*.json`），JSON Schema 强制开启 `additionalProperties: false`（当 `processor.engine == "regex_pipeline"` 时支持声明受长度与线性复杂度校验的 `steps` 数组；当导入社区 `llm_stream` 配方时，UI 强制弹窗展示 `fallbackPrompt` 全文并固定系统安全前缀以防 Prompt Injection）：
 
 ```json
 {
@@ -411,6 +420,7 @@ export interface ClipboardItem {
   "processor": {
     "engine": "builtin_rust_handler",
     "handlerName": "markdown_smart_bridge",
+    "steps": [],
     "fallbackPrompt": null,
     "providerTimeoutMs": 8
   },
@@ -428,7 +438,15 @@ export interface ClipboardItem {
         ]
       },
       "rtf": {
-        "handler": "markdown_to_rtf"
+        "handler": "markdown_to_rtf",
+        "suppressForTargetBundles": [
+          "com.tinyspeck.slackmacgap",
+          "com.hnc.Discord",
+          "com.microsoft.VSCode",
+          "com.todesktop.230313mzl4w4u92",
+          "com.apple.Terminal",
+          "com.googlecode.iterm2"
+        ]
       },
       "plainText": {
         "defaultHandler": "identity",
@@ -493,11 +511,12 @@ export interface ClipboardItem {
 | **Word for Mac / Win & WPS** | `HTML`, `RTF` | 原生标题大纲层级、加粗、列表缩进、实线边框表格与等宽代码块完好 |
 | **飞书文档 / 钉钉文档 / Pages** | `HTML` | 标题、粗体、列表、代码块与表格结构完整保留 |
 | **微信桌面版 / 飞书 IM / 钉钉 IM** | `plainText` | 经 `FrontmostApp` 启发式路由自动获得**去 `#`、去 `**` 星号的精致分段纯文本** |
-| **VSCode / Cursor / Terminal / iTerm2** | `plainText` | 按 `⌘V` **100% 获得原始无损 Markdown / 代码**（HTML 通道被自动抑制） |
-| **Slack / Discord** | `plainText` | `public.html` 被 `suppressForTargetBundles` 自动抑制，粘贴不出现富文本错乱 |
-| **Excel / Numbers（大区域复制）** | 原生不接管 | 触发 `FormatGate` G1 护栏，**0 字节拉取，复制瞬间无任何延迟渲染卡顿**，粘贴保留原生公式 |
+| **VSCode / Cursor / Terminal / iTerm2** | `plainText` | 按 `⌘V` **100% 获得原始无损 Markdown / 代码**（HTML 与 RTF 通道被同步抑制） |
+| **Slack / Discord** | `plainText` | `public.html` 与 `public.rtf` 被 `suppressForTargetBundles` 同步抑制，粘贴不出现富文本错乱 |
+| **Word / Pages 富文本复制（含伴生 TIFF）** | 正常接管 | 通过 `FormatGate` G1B 伴生文本豁免，【网页牛皮癣洗白】等滤镜可正常清洗 Word/Pages 富文本 |
+| **Excel / Numbers（大区域复制）** | 原生不接管 | 触发 `FormatGate` G1A 护栏，**0 字节拉取，复制瞬间无任何延迟渲染卡顿**，粘贴保留原生公式 |
 | **Finder / 访达（多文件复制）** | 原生不接管 | 触发 `FormatGate` G2/G3 护栏，复制 3 个文件后按 `⌘V` 完整粘出 3 个文件 |
-| **宿主退出后粘贴回归** | 全通道 | 复制 → 正常退出 PasteFlow → 在 Word 与 Terminal 中按 `⌘V` 仍能正常粘出内容 |
+| **宿主退出或暂停自动挡后粘贴回归** | 全通道 | 复制 → 正常退出或暂停自动挡 → 在 Word 与 Terminal 中按 `⌘V` 仍能正常粘出内容 |
 
 ### 8.6 与其他剪贴板管理器共存策略 (Coexistence)
 
@@ -511,28 +530,31 @@ export interface ClipboardItem {
    * **不入 SQLite 历史库**：防止明文密钥长期沉淀在本地磁盘；
    * **不进 L3 云端大模型 & 不跨端同步**：严禁发送给外部 AI，并在内部处理时尊重 `ConcealedType`。
 
-### 8.8 进程退出数据蒸发防护与生命周期临终物化 (Lifecycle Materialization)
+### 8.8 进程退出与暂停态数据蒸发防护：生命周期同步物化 (Lifecycle & Pause Materialization)
 
-* **问题（实测见附录 A.8）**：延迟供给的数据驻留在 PasteFlow 进程内存中，若进程退出前未物化，系统剪贴板 `types` 会变为空数组 `[]`，导致用户按 `⌘V` 粘不出任何东西。
+* **问题（实测见附录 A.8）**：延迟供给的数据驻留在 PasteFlow 进程内存中，若进程退出或主动释放 `DataProvider` 前未物化，系统剪贴板 `types` 会变为空数组 `[]`，导致用户按 `⌘V` 粘不出任何东西。
 * **强制方案**：
   1. **日常运行期保持纯正 Lazy 状态**：不设 1s 定时物化（从而保留粘贴瞬间的 `FrontmostApp` 动态启发式能力，且避免 `t=1s` 粘贴竞态）。
-  2. **退出路径同步物化**：在 `NSApplicationDelegate.applicationWillTerminate`（macOS）、`WM_QUERYENDSESSION` / `WM_ENDSESSION`（Windows）、Unix 信号处理器（`SIGTERM` / `SIGINT` / `SIGHUP`）及 Rust `std::panic::set_hook` 中挂载同步物化函数：
+  2. **退出路径与信号安全物化（严禁在裸 POSIX Signal Handler 内直接调 ObjC）**：在 `NSApplicationDelegate.applicationWillTerminate`（macOS）、`WM_QUERYENDSESSION` / `WM_ENDSESSION`（Windows）、**macOS GCD 异步信号源 `dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGTERM/SIGINT, dispatch_get_main_queue())`（或 Tokio `signal` 通道派发回主线程）** 及 Rust `std::panic::set_hook` 中挂载主线程物化函数：
      * 首先校验当前系统 `changeCount == ownership.changeCountAtOwn`（若不等说明剪贴板早已被用户的新复制覆盖，立即放弃物化）；
      * 若所有权仍在我方，立即将 `html`、`rtf` 与原始 `plainText` 作为静态真实数据写入系统剪贴板（Windows 调用 `OleFlushClipboard`）后安全退出。
+  3. **暂停自动挡时的前置保护**：当用户通过菜单栏或 `⌘⇧P` 暂停自动挡（`cmd_set_autopilot_enabled(false)`）且当前处于 `ownership.owned == true && !materialized` 时，后端必须**先执行一次同步物化**，再释放 `DataProvider` 强引用。
 
-### 8.9 零开销格式门控 (Zero-Copy `FormatGate` Guards G1–G5)
+### 8.9 两阶段零开销格式门控 (Two-Stage Zero-Copy `FormatGate` Guards G1–G5)
 
-* **为什么弃用“全量拉取源格式直通缓存”**：当用户在 Excel 复制大面积单元格，或在 Photoshop / Figma / Sketch 复制图层时，源应用自身也使用 `NSPasteboardItemDataProvider` 挂载了延迟渲染数据（Promised Data）。若剪贴板工具在复制瞬间遍历读取所有源格式的二进制 `Data`，会强迫源应用在复制瞬间同步渲染出几十 MB 的私有格式与 TIFF 位图，**直接导致源应用卡顿甚至假死**。
-* **强制方案（零开销 `types` 元数据门控 `FormatGate`）**：
-  接管前**只读取 `pasteboard.types` 字符串列表与 `pasteboardItems.count`（纯元数据检查，实测耗时 `< 2 µs`，0 字节拷贝，绝不触发源应用 `provideDataForType`）**。凡命中以下 G1–G5 任一条件，立即放弃接管，100% 保持系统原生剪贴板：
+* **为什么采用「Stage 1 纯元数据门控 + Stage 2 双层体积门控」**：
+  1. 当用户在 Excel 复制大面积单元格，或在 Photoshop / Figma / Sketch 复制图层时，源应用挂载了延迟渲染数据（Promised Data）。若在 Stage 1 读取任何二进制或文本内容，可能强迫源应用同步渲染大对象导致卡顿。
+  2. 反之，当用户在 **Word、Pages 或 Apple Mail 中复制富文本段落**时，macOS 会自动在 `types` 中伴生挂载 `public.tiff` / `public.pdf` 预览图。若一刀切拦截所有含 `public.tiff` 的剪贴板，会导致【网页/富文本牛皮癣洗白】无法处理 Word/Pages 复制内容。因此必须将 **G1 解耦为 G1A（私有复杂对象无条件拦截）与 G1B（无现代文本通道的纯图片拦截）**。
+* **强制方案（两阶段 `FormatGate`）**：
 
-| 护栏编号 | 拦截条件（仅检查元数据与文本长度） | 拦截理由与实测依据 |
+| 阶段与护栏编号 | 拦截/分级条件 | 工程理由与本机实测依据 |
 |---|---|---|
-| **G1（重型与私有对象护栏）** | 源 `types` 中包含办公表格、设计软件、富媒体或二进制对象类型（匹配前缀/集合：`com.microsoft.*`、`org.openxmlformats.*`、`com.adobe.*`、`com.figma.*`、`com.bohemiancoding.*`、`com.apple.iWork.*`、`public.tiff`、`public.png`、`public.pdf`、`com.apple.flat-rtfd`） | 保护 Excel 内部公式粘贴、Figma/PS 图层粘贴与富媒体复制，**绝不触发源应用的 Promised Data 渲染卡顿**（实测拦截耗时 `1.29 µs`）。 |
-| **G2（多条目护栏）** | `pasteboardItems.count > 1` | 防止单 Item 接管将多选复制或多文件复制压平为 1 项（附录 A.11，实测拦截耗时 `0.08 µs`）。 |
-| **G3（文件引用护栏）** | 源 `types` 包含 `public.file-url` 或 `NSFilenamesPboardType` | 保护 Finder 文件与文件夹复制粘贴（实测拦截耗时 `0.08 µs`）。 |
-| **G4（纯 Legacy 格式护栏）** | 源 `types` 中既无 `public.utf8-plain-text` 也无 `public.html` | 防止纯 Legacy 4 字符 Flavor 源在接管后丢失数据（附录 A.7，实测拦截耗时 `0.62 µs`）。 |
-| **G5（文本体积上限护栏，校准为 `64KB`）** | 读取的 `public.utf8-plain-text` 或 `public.html` 字节长度 **`> 64KB`** | **由 Step 0 实测校准（附录 A.12）**：`240KB` 文本转换耗时达 `8.50ms`（突破 `8ms` 预算），而 **`64KB`**（约 2.5 万汉字长文）耗时 p50=`2.79ms`、max=`4.96ms`，100% 满足 `<5ms` 目标。 |
+| **Stage 1 · G1A（私有复杂对象无条件护栏）** | 源 `types` 包含电子表格、OLE 对象、设计软件图层或富文本附件包：`com.microsoft.excel.*`、`com.microsoft.Object-Descriptor`、`com.microsoft.DataObject`、`com.apple.iWork.TS*`、`com.adobe.*`、`com.figma.*`、`com.bohemiancoding.*`、`com.apple.flat-rtfd` | 0 字节读取直接放弃接管，保护 Excel 公式与设计软件图层，**绝不触发源应用 Promised Data 渲染卡顿**（实测耗时 `1.21–3.42 µs`）。 |
+| **Stage 1 · G1B（纯图片/富媒体独立护栏）** | 源 `types` 包含 `public.tiff`、`public.png` 或 `public.pdf`，**且不含现代文本通道**（既无 `public.utf8-plain-text` 也无 `public.html`） | 拦截系统截图与纯图片复制（交由 v0.2.0 L2 OCR 异步处理），同时**精准放行携带伴生 TIFF 预览图的 Word/Pages 富文本复制**（实测耗时 `0.50–1.17 µs`）。 |
+| **Stage 1 · G2（多条目护栏）** | `pasteboardItems.count > 1` | 防止单 Item 接管将多选复制或多文件复制压平为 1 项（附录 A.11，实测耗时 `0.12 µs`）。 |
+| **Stage 1 · G3（文件引用护栏）** | 源 `types` 包含 `public.file-url` 或 `NSFilenamesPboardType` | 保护 Finder 文件与文件夹复制粘贴（实测耗时 `0.12 µs`）。 |
+| **Stage 1 · G4（纯 Legacy 格式护栏）** | 源 `types` 中既无 `public.utf8-plain-text` 也无 `public.html` | 防止纯 Legacy 4 字符 Flavor 源在接管后丢失数据（附录 A.7，实测耗时 `0.62–1.00 µs`）。 |
+| **Stage 2 · G5（双层文本体积门控：`64KB` / `256KB`）** | 仅当 Stage 1 通过后读取文本长度 `len`：<br>• `len ≤ 64KB` → `FULL_MULTI_CHANNEL`（全量三通道）<br>• `64KB < len ≤ 256KB` → `LIGHTWEIGHT_TEXT_ONLY`（仅纯文本轻量净化）<br>• `len > 256KB` → `G5_OVERSIZE`（放弃接管） | **兼顾 `<8ms` 铁律与 AI 超长回复场景**：`≤64KB` 全量转换 p95=`3.98ms`；`64~256KB` 走单遍 UTF-8 字节流纯文本净化（实测 `120KB` 耗时仅 `0.48ms`），并支持从菜单栏/HUD 手动转为富文本；`>256KB` 直接放弃接管。 |
 
 ### 8.10 Universal Clipboard / Handoff 交互规范
 
@@ -627,30 +649,38 @@ export interface ClipboardItem {
 
 ## 12. 下游 Agent 研发指令指南 (Instructions for Downstream Agents)
 
-### Step 0 — 架构地基与关键假设实测 Spike（✅ 已于 2026-10-14 完成，实测脚本位于 `spike/step0_verify.swift`）
+### Step 0 — 架构地基实测与跨进程冒烟准入（拆分为 Step 0A 本机 AOT 基准验证 + Step 0B 跨进程 E2E 联调）
 
-全部 10 项核心验证均已在 macOS 27.0.1 真机跑通（详见附录 A.1–A.12）：
+#### Step 0A — 本机 AOT 算子、两阶段门控与内存基线实测（✅ 已完成，脚本位于 `spike/step0_verify.swift`）
+
+全部 10 项核心机制与算子延迟均已在 macOS 27.0.1 真机跑通（详见附录 A.1–A.12）：
 
 | 验证编号 | 验证项 | 实测结论与状态 |
 |---|---|---|
-| **S0** | **延迟供给 + 回调读 `FrontmostApp` 启发式 vs 静态多通道写入** | ✅ **通过**：`WindowObserver` 环形缓冲 O(1) 读取 p50=`0.042 µs`；Word(`rich_office`) / 微信(`im_cleaned_text`) / Terminal(`raw_passthrough`) / Slack(`html_suppressed`) / `<150ms` 抢读保护全部 100% 准确命中。 |
+| **S0-Logic** | **`WindowObserver` 环形缓冲 O(1) 读取 + `DYNAMIC_BY_TARGET` + `HTML/RTF` 双通道同步抑制** | ✅ **通过**：`WindowObserver` 零拷贝读取 p50=`0.042 µs`；Word(`rich_office`) / 微信(`im_cleaned_text`) / Terminal(`raw_passthrough`) / Slack(`html_suppressed` & `rtf_suppressed`) / `<150ms` 抢读保护全部 100% 准确命中。 |
 | **S0.5** | **macOS 15.4+ / 27 `NSPasteboard.accessBehavior` 实测** | ✅ **通过**：本机 `accessBehavior.rawValue == 0`（默认允许访问），API 可用。 |
-| **S1 & S5** | **`CallbackBudget` 8ms 硬超时与 G5 体积阈值校准** | ✅ **通过并完成校准**：实测 `240KB` 转换需 `8.50ms`（超 8ms），将 **G5 阈值校准为 `64KB`** 后 p50=`2.79ms`、max=`4.96ms`；社媒链接瘦身改用预编译正则后耗时由 `8.77ms` 降至 `129 µs`。 |
-| **S2** | **`FormatGate` 零开销拦截 Excel / Figma / 多文件复制** | ✅ **通过**：7 类场景全部在 `0.083–1.292 µs` 内完成元数据拦截，0 字节源数据拉取。 |
+| **S1 & S5** | **`CallbackBudget` 8ms 预算与 G5 双层体积阈值（`64KB` / `256KB`）校准** | ✅ **通过并完成校准**：`≤64KB` 全量三通道转换 p50=`2.79ms`、max=`4.96ms`；`64KB~256KB` 走 `LIGHTWEIGHT_TEXT_ONLY` 单遍 UTF-8 字节流纯文本净化，实测 `120KB` 耗时 p50=`0.48ms`、max=`0.67ms`；社媒链接瘦身预编译正则耗时 `129 µs`（较 `NSDataDetector` 提速 `68x`）。 |
+| **S2** | **两阶段 `FormatGate`（G1A 私有对象拦截 vs G1B 伴生预览图放行）** | ✅ **通过**：9 类场景（含 Excel/Figma 拦截、Word 伴生 TIFF 富文本放行、纯截图拦截、120KB 轻量降级、600KB 拒绝）全部在 `0.125–3.416 µs` 内完成判定，Stage 1 零字节正文拉取。 |
 | **S3** | **显式 `plainText` 注册防 AppKit RTF 泄漏** | ✅ **通过**（附录 A.10）：显式注册 `public.utf8-plain-text` 100% 优先于 AppKit RTF 合成。 |
 | **S4** | **生命周期临终物化与所有权前置校验** | ✅ **通过**（附录 A.8）：退出前同步物化使独立进程在 Owner 退出后仍可完整读出三通道数据。 |
 | **S6** | **零权限 `⌘C⌘C` 差分检测** | ✅ **通过**（附录 A.9）：连续复制相同文本 `changeCount` 严格递增（`28→29→30`）。 |
 | **S7** | **`SourceApp` 窗口激活事件流抗竞态解析** | ✅ **通过**：复制后 `30ms` 极速切窗至 Word，回溯 `SourceApp` 仍 100% 精确识别为 `com.google.Chrome`（`confidence=exact`）。 |
-| **S8 & S11** | **非激活 `NSPanel` + `WKWebView` 焦点路由与 AOT 内存基线** | ✅ **通过**：`canBecomeKey=true`、`appIsActive=false` 验证通过；AOT 编译态 Stage 0 `phys_footprint=1.95MB`，Stage 1 `47.33MB`，Stage 2（含 `WKWebView`）`53.53MB`。 |
+| **S8 & S11** | **非激活 `NSPanel` + `WKWebView` 属性校验与 AOT 内存基线** | ✅ **通过**：`canBecomeKey=true`、`appIsActive=false` 验证通过；AOT 编译态 Stage 0 `phys_footprint=1.95MB`，Stage 1 `47.33MB`，Stage 2（含 `WKWebView`）`53.53MB`（本进程增量 `+6.20MB`）。 |
 
-### Step 1 — 编写《Rust 核心引擎技术设计文档 (TDD)》并交付 v0.1.0 极简菜单栏引爆版（第 1–2 周）
+#### Step 0B — 宿主工程首日跨进程交互式 E2E 冒烟准入（Step 1 启动首日必跑 Checklist）
 
-* 依据 Step 0 实测锁定的参数（G5=`64KB`、`50ms` 轮询、`150ms` 抢读保护窗、预编译正则），完成 8 个核心 Rust 模块的接口定义与单元测试。
-* 实现【AI 星号净化器】（含 `FrontmostApp` 动态分支与 `mso-` 样式快照测试）与【社媒/电商链接瘦身】，挂载原生菜单栏控制中心与胶囊 Toast，完成 Word / WPS / 飞书 / 微信 / Terminal / Slack 真机回归并发布 v0.1.0。
+在进入 Step 1 编码首日，将最小宿主进程挂载至系统剪贴板并完成以下 **2 项跨进程真实交互冒烟验证**：
+1. **S0-E2E（4 应用真实粘贴协商冒烟）**：后台运行最小宿主 Provider，依次切至 **Word / 微信 / Terminal / Slack** 按下真实 `⌘V`，确认 `FrontmostApp` 实时读取准确，且 Slack 在 `public.html` 与 `public.rtf` 被同步返回 `nil` 时 100% 自动回退读取 `public.utf8-plain-text`（若某应用不回退则启用 `<pre>` 转义源码兜底）。
+2. **S8-E2E（非激活 `NSPanel` 内 `WKWebView` 真实按键吞吐冒烟）**：在 TextEdit 保持焦点输入状态下弹出 `NonActivatingHUDPanel` 并聚焦内部 `WKWebView`，物理按下 `1` / `Esc`，确认前端 JS `keydown` 100% 收到事件且按键未泄漏进 TextEdit。
 
-### Step 2 — 编写《UI Spec & IPC Spec》并交付 v0.1.5 完整交互版（第 3–5 周）
+### Step 1 — 落地《Rust 核心引擎技术设计文档 (TDD v1.0)》并交付 v0.1.0 极简菜单栏引爆版（第 1–2 周）
 
-* 在 v0.1.0 核心转换体验获得验证后，挂载常驻隐藏 `Micro-HUD`、磁吸式历史与贪吃蛇抽屉、L3 AI 流式汇总及滤镜商店主面板。
+* 基于已定稿的《TDD v1.0》完成 8 个核心 Rust 模块实现、单元测试与 Step 0B 跨进程冒烟。
+* 实现【AI 星号净化器】（含 `FrontmostApp` 动态分支、双通道抑制与 `mso-` 样式快照测试）与【社媒/电商链接瘦身】，挂载原生菜单栏控制中心与原生 `NativeToastController` 胶囊，发布 v0.1.0。
+
+### Step 2 — 落地《UI Spec v1.0 & IPC Spec v1.0》并交付 v0.1.5 完整交互版（第 3–5 周）
+
+* 基于已定稿的《UI Spec v1.0》与《IPC Spec v1.0》，挂载常驻隐藏 `Micro-HUD`、磁吸式历史与贪吃蛇抽屉（SQLite FTS5 `trigram` 检索）、L3 AI 流式汇总及滤镜商店主面板。
 
 ## 附录 A：本机与基准实测数据记录 (Verified Benchmarks)
 
@@ -722,55 +752,57 @@ export interface ClipboardItem {
 
 * 实测复制 2 个文件（`pasteboardItems.count = 2`）后若用单 Item 接管，`count` 会塌缩为 `1`。确立 §8.9 护栏 G2/G3。
 
-### A.12 v1.4 Step 0 补测数据（AOT `-O` 编译态内存、G5 阈值校准、FrontmostApp 启发式与 NSPanel 实测）
+### A.12 v1.4 Step 0A 实测数据（AOT `-O` 编译态内存、两阶段 FormatGate、G5 双层阈值与 NSPanel 实测）
 
 * **测试脚本**：`spike/step0_verify.swift`（通过 `swiftc -O` 编译为原生 ARM64 二进制执行）。
 * **实测输出原件**：
   ```text
-  📊 [Stage 0 - 纯原生无窗口核心进程基线内存]: phys_footprint = 1.95 MB, RSS = 8.02 MB
+  📊 [Stage 0 - 纯原生无窗口核心进程基线内存]: phys_footprint = 1.95 MB, RSS = 8.03 MB
 
-  --- [S0 & S7] WindowObserver 环形缓冲与 FrontmostApp 启发式路由实测 ---
-    • NSWorkspace.frontmostApplication 直接读取 (1,000次): p50 = 0.167 µs, p95 = 0.167 µs, p99 = 0.209 µs
-    • WindowObserver 环形缓冲 O(1) 读取 (10,000次):      p50 = 0.042 µs, p95 = 0.084 µs, p99 = 0.125 µs
+  --- [S0-Logic & S7] WindowObserver 环形缓冲与 FrontmostApp 启发式路由实测 ---
+    • NSWorkspace.frontmostApplication 直接读取 (1,000次): p50 = 0.167 µs, p95 = 0.209 µs, p99 = 0.209 µs
+    • WindowObserver 引用环形缓冲 O(1) 读取 (10,000次):  p50 = 0.042 µs, p95 = 0.083 µs, p99 = 0.084 µs
     • [S7 抗竞态 SourceApp 回溯]: 复制后 30ms 极速切到 Word，回溯 SourceApp = com.google.Chrome (confidence=exact) -> ✅ PASS
 
-  --- [S2] FormatGate G1–G5 零开销元数据护栏实测 (G5=64KB) ---
-    • Excel 单元格复制 (含公式与 TIFF 预览) -> passed=false reason=G1_COMPLEX_OBJECT (1.292 µs) ✅
-    • Figma 图层复制 (含 PDF/SVG 私有数据)  -> passed=false reason=G1_COMPLEX_OBJECT (1.083 µs) ✅
-    • Finder 复制 3 个文件                  -> passed=false reason=G2_MULTI_ITEM     (0.083 µs) ✅
-    • Finder 复制单个文件                   -> passed=false reason=G3_FILE_URL       (0.083 µs) ✅
-    • 老旧应用纯 Legacy 4字符类型           -> passed=false reason=G4_LEGACY_ONLY    (0.625 µs) ✅
-    • 复制 120KB 超长日志 (>64KB G5阈值)    -> passed=false reason=G5_OVERSIZE       (0.375 µs) ✅
-    • ChatGPT / DeepSeek 复制 Markdown      -> passed=true  reason=NONE              (0.375 µs) ✅
+  --- [S2] 两阶段 FormatGate (G1A/G1B 解耦 + G5 双层体积降级) 实测 ---
+    • Excel 单元格复制 (含公式与 TIFF)       -> passed=false outcome=G1A_COMPLEX_OBJECT    (3.416 µs) ✅
+    • Figma 图层复制 (含 PDF 私有数据)       -> passed=false outcome=G1A_COMPLEX_OBJECT    (1.208 µs) ✅
+    • Word/Pages 富文本复制 (伴生 TIFF 预览) -> passed=true  outcome=FULL_MULTI_CHANNEL    (1.167 µs) ✅
+    • 系统纯截图复制 (仅有 PNG/TIFF 无文本)  -> passed=false outcome=G1B_STANDALONE_MEDIA  (0.500 µs) ✅
+    • Finder 复制 3 个文件                   -> passed=false outcome=G2_MULTI_ITEM         (0.125 µs) ✅
+    • 老旧应用纯 Legacy 4字符类型            -> passed=false outcome=G4_LEGACY_ONLY        (1.000 µs) ✅
+    • AI 超长回复 120KB (64~256KB 轻量降级)  -> passed=true  outcome=LIGHTWEIGHT_TEXT_ONLY (0.541 µs) ✅
+    • 复制 600KB 巨型日志 (>256KB 拒绝)      -> passed=false outcome=G5_OVERSIZE           (0.292 µs) ✅
+    • ChatGPT 复制常规 Markdown (4KB)        -> passed=true  outcome=FULL_MULTI_CHANNEL    (0.625 µs) ✅
 
-  --- [S0, S1 & S5] L1 滤镜转换、DYNAMIC_BY_TARGET 路由、社媒链接瘦身、静默 DLP 与 8ms 预算实测 ---
-    • Word for Mac 请求 HTML           -> variant=rich_office             (269.08 µs) ✅
-    • 微信 WeChat 请求 plainText       -> variant=im_cleaned_text         (79.21 µs)  ✅
-    • Terminal 请求 plainText          -> variant=raw_passthrough         (0.25 µs)   ✅
-    • Slack 请求 HTML (防富文本劫持)    -> variant=html_suppressed         (0.08 µs)   ✅
-    • VSCode 请求 HTML (防富文本劫持)   -> variant=html_suppressed         (0.04 µs)   ✅
-    • 复制后 40ms 后台嗅探抢读          -> variant=probe_guard_passthrough (0.04 µs)   ✅
-    • [社媒链接瘦身 (预编译正则版)] 净化结果: https://www.bilibili.com/video/BV1xx411c7mD/ (耗时 129.12 µs，较 NSDataDetector 8771.67 µs 提速 68x) ✅ PASS
-    • [S1/S5 64KB (G5 校准后上限) 转换耗时]: p50 = 2.79 ms, p95 = 3.98 ms, max = 4.96 ms -> ✅ PASS (<8ms)
-    • [S1/S5 240KB (原 G5 上限，超 8ms) 转换耗时]: p50 = 7.84 ms, p95 = 8.50 ms, max = 8.59 ms -> ⚠️ 超出 8ms (证明 G5 必须收紧至 64KB)
+  --- [S0-Logic, S1 & S5] L1 滤镜转换、HTML/RTF 双通道抑制、轻量降级与 8ms 预算实测 ---
+    • Word for Mac 请求 HTML             -> variant=rich_office             (397.88 µs) ✅
+    • 微信 WeChat 请求 plainText         -> variant=im_cleaned_text         (17.12 µs)  ✅
+    • Terminal 请求 plainText            -> variant=raw_passthrough         (0.42 µs)   ✅
+    • Slack 请求 HTML (防富文本劫持)      -> variant=html_suppressed         (0.21 µs)   ✅
+    • Slack 请求 RTF (同步抑制防回退劫持) -> variant=rtf_suppressed          (0.17 µs)   ✅
+    • VSCode 请求 HTML (防富文本劫持)     -> variant=html_suppressed         (0.17 µs)   ✅
+    • 复制后 40ms 后台嗅探抢读            -> variant=probe_guard_passthrough (0.08 µs)   ✅
+    • [120KB 长文 LIGHTWEIGHT_TEXT_ONLY 纯文本净化耗时]: p50 = 0.48 ms, p95 = 0.61 ms, max = 0.67 ms -> ✅ PASS (<5ms)
+    • [S1/S5 64KB 全量三通道转换耗时]: p50 = 2.79 ms, p95 = 3.98 ms, max = 4.96 ms -> ✅ PASS (<8ms)
 
-  --- [S8 & S11] 非激活 NSPanel + WKWebView 无焦点按键路由与 AOT 编译态真实内存基线 ---
+  --- [S8 & S11] 非激活 NSPanel + WKWebView 属性校验与 AOT 编译态真实内存基线 ---
     • [S8 NonActivatingHUDPanel 属性校验]: canBecomeKey=true, canBecomeMain=false, nonActivating=true, appIsActive=false -> ✅ PASS
-    • [Stage 1 - 创建原生 NonActivating NSPanel (v0.1.0 含 Toast/Menu 态)]: phys_footprint = 47.33 MB, RSS = 67.89 MB
-    • [Stage 2 - 挂载常驻隐藏 WKWebView 后本进程内存 (v0.1.5 含 HUD 态)]: phys_footprint = 53.53 MB, RSS = 87.25 MB (WebView 本进程增量 +6.20 MB)
+    • [Stage 1 - 创建原生 NonActivating NSPanel (v0.1.0 含 Toast/Menu 态)]: phys_footprint = 47.33 MB (冷态最小 6.95 MB), RSS = 67.89 MB
+    • [Stage 2 - 挂载常驻隐藏 WKWebView 后本进程内存 (v0.1.5 含 HUD 态)]: phys_footprint = 53.53 MB, RSS = 87.25 MB (WebView 本进程增量 +6.20 ~ +7.13 MB)
   ```
 
 ## 附录 B：架构与产品已决议项登记表 (Resolved Decisions Register)
 
 | 编号 | 决策议题 | 最终生效决议 | 核心依据与工程约束 | 关联章节 |
 |---|---|---|---|---|
-| **D1** | 窗口演进与 `Micro-HUD` 常驻策略 | **v0.1.0 纯菜单栏无 Webview；v0.1.5 `micro-hud` 常驻隐藏不销毁** | v0.1.0 砍掉重型 UI 确保 2 周极速交付（实测 `phys_footprint = 47.33 MB`）；v0.1.5 预热常驻隐藏 `micro-hud` 实现 `0ms` 唤醒（主进程增量仅 `+6.20 MB`），仅 `main-dashboard` 关闭后 30s 销毁。 | §4.2 / §6.1 / A.12 |
+| **D1** | 窗口演进与 `Micro-HUD` 常驻策略 | **v0.1.0 纯菜单栏无 Webview；v0.1.5 `micro-hud` 常驻隐藏不销毁** | Rust 引擎逻辑内存 `< 10MB`（Stage 0 `phys_footprint = 1.95 MB`）；v0.1.0 整应用 `phys_footprint < 55MB`（实测峰值 `47.33 MB`）；v0.1.5 预热常驻隐藏 `micro-hud` 主进程 `< 65MB`（实测 `53.53 MB`，增量仅 `+6.20 MB`）。 | §1.3 / §6.1 / A.12 |
 | **D2** | 开源许可证选择 | **核心代码 `Apache-2.0` + 配方仓库 `CC0`** | Apache-2.0 提供明确专利授权条款，利于企业采用；社区配方仓库用 CC0 消除分享摩擦。 | §11.2 |
 | **D3** | 双端代码签名与公证预算 | **macOS v0.1.0 首发必办（$99/年）；Windows v0.2.0 前必办** | 消除 Gatekeeper 与 SmartScreen 拦截，保障大众层安装转化率。 | §11.1 |
 | **D4** | Windows OCR 语言包缺失兜底 | **仅探测提示并引导系统安装，不内置离线模型** | 死守 `< 10MB` 安装包体积红线。 | §5.2 |
-| **D5** | 目标应用感知的实现路径 | **默认采用 Tier 0「粘贴回调时 O(1) 读取 `FrontmostApp` 启发式」** | 无需键盘钩子与任何权限即可区分 Word、微信 IM、Terminal 与 Slack（实测环形缓冲读取仅 `0.042 µs`）。 | §3.2 / §5.4 / A.12 |
+| **D5** | 目标应用感知的实现路径 | **默认采用 Tier 0「粘贴回调时 O(1) 读取 `FrontmostApp` 启发式 + `HTML/RTF` 双通道同步抑制」** | Step 0A 已验证环形缓冲 O(1) 零分配读取仅 `0.042 µs`，并于 Step 0B 完成 4 应用跨进程 E2E 确认。 | §3.2 / §5.4 / A.12 |
 | **D6** | 品牌命名与域名资产锁定 | **中文名「灵贴」；英文名从 `PasteFlowApp` 与 `PasteMorph` 中拍板并锁包名** | 规避 GitHub 现有 `ognistik/alfred-pasteflow` 插件同名混淆。 | §1.1 / §11.3 |
-| **D7** | 进程退出数据蒸发防护策略 | **采用生命周期临终同步物化（取消 1s 定时物化）** | 既保留日常运行期 `FrontmostApp` 动态启发式能力并消除 `t=1s` 粘贴竞态，又保证正常退出/崩溃时剪贴板数据不丢失。 | §8.8 / A.8 |
-| **D8** | DLP 敏感信息处理策略 | **默认执行「不入历史、不进云端、不同步」静默三不保护，绝不篡改粘贴明文** | 彻底废除强制将粘贴内容改为 `<REDACTED>` 的反人类设计；脱敏改写仅作为 HUD 显式动作或 Opt-in 规则提供，且移除手机号/身份证号等高误报项。 | §2.4 / §5.1 / §8.7 |
-| **D9** | 源剪贴板复杂格式处理与 G5 阈值 | **采用零开销 `FormatGate` 元数据门控，并将 G5 文本上限校准为 `64KB`** | 遇到 Excel / Figma / 多文件复制时仅读 `types` 字符串列表即放弃接管（耗时 `< 2 µs`）；将 G5 由 `256KB` 收紧至 `64KB`，确保转换耗时（p95=`3.98ms`）严格在 `8ms` 硬超时内。 | §6.2 / §8.9 / A.12 |
+| **D7** | 进程退出与暂停态数据蒸发防护 | **采用主线程安全的生命周期同步物化 + 暂停自动挡前置物化** | 通过 `applicationWillTerminate`、GCD `DISPATCH_SOURCE_TYPE_SIGNAL` 主线程信号源与暂停前物化，确保退出或关闭自动挡后剪贴板绝不变空，且杜绝裸 signal handler 死锁风险。 | §8.8 / A.8 |
+| **D8** | DLP 敏感信息处理策略 | **默认执行「不入历史、不进云端、不同步」静默三不保护，绝不篡改粘贴明文** | 彻底废除强制将粘贴内容改为 `<REDACTED>` 的反人类设计；脱敏改写仅作为 HUD / `⌃⌥D` 显式动作或 Opt-in 规则提供，且移除手机号/身份证号等高误报项。 | §2.4 / §5.1 / §8.7 |
+| **D9** | 两阶段 `FormatGate` 与 G5 双层阈值 | **采用 Stage 1 零读取元数据门控（G1A/G1B 解耦）+ Stage 2 双层体积门控（`64KB` / `256KB`）** | G1A 无条件拦截 Excel/Figma 私有对象，G1B 仅拦截无文本伴生的纯图片（放行 Word 富文本伴生 TIFF 预览）；`≤64KB` 全量三通道，`64~256KB` 走 `LIGHTWEIGHT_TEXT_ONLY`（120KB 实测 `0.48ms`），`>256KB` 拒绝接管。 | §6.2 / §8.9 / A.12 |
 | **D10** | MVP 范围切分与验证节奏 | **拆分为 v0.1.0（2 周极简菜单栏版）+ v0.1.5（3 周完整交互版）** | 先用 2 周跑通核心自动挡 15 秒演示验证真实留存，再投入 HUD、抽屉、贪吃蛇与 L3 流式开发。 | §10.1 / §10.2 |

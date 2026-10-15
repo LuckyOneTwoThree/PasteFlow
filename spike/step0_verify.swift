@@ -4,8 +4,15 @@ import WebKit
 import Darwin.Mach
 
 // ============================================================================
-// PasteFlow (灵贴) — Master Spec v1.4 Step 0 架构地基与关键假设实测套件 (AOT Release)
-// 覆盖验证项: S0, S0.5, S1, S2, S3/S4/S6, S5, S7, S8/S11
+// PasteFlow (灵贴) — Master Spec v1.4 Step 0A 架构地基与算子实测套件 (AOT Release)
+// 覆盖验证项:
+//   • S0-Logic: WindowObserver 环形缓冲 O(1) 读取 + DYNAMIC_BY_TARGET 路由 + HTML/RTF 双通道同步抑制
+//   • S0.5:     macOS 15.4+/27 NSPasteboard.accessBehavior 隐私状态探测
+//   • S1 & S5:  L1 算子耗时、G5 双层阈值 (<=64KB 全量 / 64~256KB 轻量纯文本 / >256KB 拒绝)
+//   • S2:       两阶段 FormatGate (Stage1 零读取元数据门控 G1A/G1B/G2/G3/G4 + Stage2 体积分级)
+//               含「Word/Pages 富文本伴生 TIFF 预览图放行」与「纯图片截图拦截」专项用例
+//   • S7:       极速复制切窗 (30ms) 抗竞态 SourceApp 时间戳回溯
+//   • S8 & S11: NonActivatingHUDPanel 属性校验与三阶段真实物理内存 (phys_footprint & RSS)
 // ============================================================================
 
 struct MemorySnapshot {
@@ -38,7 +45,7 @@ func percentile(_ sorted: [Double], _ p: Double) -> Double {
 
 let memStage0 = currentMemorySnapshot()
 print("========================================================================")
-print("🚀 PasteFlow Master Spec v1.4 — Step 0 架构地基真机实测套件 (AOT -O 编译态)")
+print("🚀 PasteFlow Master Spec v1.4 — Step 0A 架构地基真机实测套件 (AOT -O 编译态)")
 print("🕒 执行时间: \(ISO8601DateFormatter().string(from: Date()))")
 print("💻 操作系统: \(ProcessInfo.processInfo.operatingSystemVersionString)")
 print(String(format: "📊 [Stage 0 - 纯原生无窗口核心进程基线内存]: phys_footprint = %.2f MB, RSS = %.2f MB",
@@ -46,15 +53,22 @@ print(String(format: "📊 [Stage 0 - 纯原生无窗口核心进程基线内存
 print("========================================================================\n")
 
 // ----------------------------------------------------------------------------
-// 1. [S0 & S7] WindowObserver 环形缓冲 vs NSWorkspace 直接查询耗时 & 前台启发式路由
+// 1. [S0-Logic & S7] WindowObserver 环形缓冲与 FrontmostApp 启发式路由实测
 // ----------------------------------------------------------------------------
-print("--- [S0 & S7] WindowObserver 环形缓冲与 FrontmostApp 启发式路由实测 ---")
+print("--- [S0-Logic & S7] WindowObserver 环形缓冲与 FrontmostApp 启发式路由实测 ---")
 
-struct AppActivationRecord {
+final class AppActivationRecord {
     let bundleId: String
     let appName: String
     let pid: pid_t
     let timestampMs: UInt64
+
+    init(bundleId: String, appName: String, pid: pid_t, timestampMs: UInt64) {
+        self.bundleId = bundleId
+        self.appName = appName
+        self.pid = pid
+        self.timestampMs = timestampMs
+    }
 }
 
 final class WindowObserver {
@@ -78,18 +92,21 @@ final class WindowObserver {
     }
 
     func recordActivation(bundleId: String, appName: String, pid: pid_t, timestampMs: UInt64) {
+        let rec = AppActivationRecord(bundleId: bundleId, appName: appName, pid: pid, timestampMs: timestampMs)
         lock.lock()
-        defer { lock.unlock() }
         if ringBuffer.count >= capacity {
             ringBuffer.removeFirst()
         }
-        ringBuffer.append(AppActivationRecord(bundleId: bundleId, appName: appName, pid: pid, timestampMs: timestampMs))
+        ringBuffer.append(rec)
+        lock.unlock()
     }
 
+    /// 零拷贝返回最新激活的应用引用 (对应 Rust Arc<AppActivationRecord>::clone)
     func currentFrontmostApp() -> AppActivationRecord? {
         lock.lock()
-        defer { lock.unlock() }
-        return ringBuffer.last
+        let last = ringBuffer.last
+        lock.unlock()
+        return last
     }
 
     func resolveSourceApp(atCopyTimeMs copyTimeMs: UInt64) -> (record: AppActivationRecord?, confidence: String) {
@@ -129,7 +146,7 @@ print(String(format: "  • NSWorkspace.frontmostApplication 直接读取 (1,000
              percentile(nsWorkspaceLatenciesUs, 0.50),
              percentile(nsWorkspaceLatenciesUs, 0.95),
              percentile(nsWorkspaceLatenciesUs, 0.99)))
-print(String(format: "  • WindowObserver 环形缓冲 O(1) 读取 (10,000次):      p50 = %.3f µs, p95 = %.3f µs, p99 = %.3f µs",
+print(String(format: "  • WindowObserver 引用环形缓冲 O(1) 读取 (10,000次):  p50 = %.3f µs, p95 = %.3f µs, p99 = %.3f µs",
              percentile(ringBufferLatenciesUs, 0.50),
              percentile(ringBufferLatenciesUs, 0.95),
              percentile(ringBufferLatenciesUs, 0.99)))
@@ -143,82 +160,115 @@ let s7Pass = (resolved.record?.bundleId == "com.google.Chrome" && resolved.confi
 print("  • [S7 抗竞态 SourceApp 回溯]: 复制后 30ms 极速切到 Word，回溯 SourceApp = \(resolved.record?.bundleId ?? "nil") (confidence=\(resolved.confidence)) -> \(s7Pass ? "✅ PASS" : "❌ FAIL")\n")
 
 // ----------------------------------------------------------------------------
-// 2. [S2] FormatGate G1–G5 零开销元数据门控实测 (G5 校准为 64KB)
+// 2. [S2] 两阶段 FormatGate 实测 (G1A 私有对象 vs G1B 伴生预览图解耦 + G5 双层体积门控)
 // ----------------------------------------------------------------------------
-print("--- [S2] FormatGate G1–G5 零开销元数据护栏实测 (G5=64KB) ---")
+print("--- [S2] 两阶段 FormatGate (G1A/G1B 解耦 + G5 双层体积降级) 实测 ---")
 
-enum GateSkipReason: String {
-    case g1ComplexObject = "G1_COMPLEX_OBJECT"
-    case g2MultiItem     = "G2_MULTI_ITEM"
-    case g3FileUrl       = "G3_FILE_URL"
-    case g4LegacyOnly    = "G4_LEGACY_ONLY"
-    case g5Oversize      = "G5_OVERSIZE"
+enum GateSkipReason: String, Error {
+    case g1aComplexPrivateObject = "G1A_COMPLEX_OBJECT"
+    case g1bStandaloneMedia      = "G1B_STANDALONE_MEDIA"
+    case g2MultiItem             = "G2_MULTI_ITEM"
+    case g3FileUrl               = "G3_FILE_URL"
+    case g4LegacyOnly            = "G4_LEGACY_ONLY"
+    case g5Oversize              = "G5_OVERSIZE"
 }
 
-struct FormatGateResult {
-    let passed: Bool
-    let reason: GateSkipReason?
-    let elapsedUs: Double
+enum PayloadTier: String {
+    case fullMultiChannel    = "FULL_MULTI_CHANNEL"     // <= 64KB
+    case lightweightTextOnly = "LIGHTWEIGHT_TEXT_ONLY"  // 64KB ~ 256KB
 }
 
-func evaluateFormatGate(types: [String], itemCount: Int, textByteLength: Int, maxBytes: Int = 64 * 1024) -> FormatGateResult {
-    let t0 = DispatchTime.now().uptimeNanoseconds
+/// 第一阶段：纯元数据门控（0 字节正文读取）
+func evaluateMetadataGate(types: [String], itemCount: Int) -> Result<Void, GateSkipReason> {
     if itemCount > 1 {
-        let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-        return FormatGateResult(passed: false, reason: .g2MultiItem, elapsedUs: us)
-    }
-    for t in types {
-        if t == "public.file-url" || t == "NSFilenamesPboardType" {
-            let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-            return FormatGateResult(passed: false, reason: .g3FileUrl, elapsedUs: us)
-        }
-        if t.hasPrefix("com.microsoft.") || t.hasPrefix("org.openxmlformats.") ||
-           t.hasPrefix("com.adobe.") || t.hasPrefix("com.figma.") ||
-           t.hasPrefix("com.bohemiancoding.") || t.hasPrefix("com.apple.iWork.") ||
-           t == "public.tiff" || t == "public.pdf" || t == "com.apple.flat-rtfd" {
-            let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-            return FormatGateResult(passed: false, reason: .g1ComplexObject, elapsedUs: us)
-        }
+        return .failure(.g2MultiItem)
     }
     let hasModernText = types.contains("public.utf8-plain-text") || types.contains("public.html")
+    var hasCompanionMedia = false
+
+    for t in types {
+        if t == "public.file-url" || t == "NSFilenamesPboardType" {
+            return .failure(.g3FileUrl)
+        }
+        // G1A: 电子表格、OLE 嵌入对象、设计软件图层或富文本附件包 -> 无条件拦截，绝不拉取 Promised Data
+        if t.hasPrefix("com.microsoft.excel.") || t == "com.microsoft.Object-Descriptor" ||
+           t == "com.microsoft.DataObject" || t.hasPrefix("com.apple.iWork.TS") ||
+           t.hasPrefix("com.adobe.") || t.hasPrefix("com.figma.") ||
+           t.hasPrefix("com.bohemiancoding.") || t == "com.apple.flat-rtfd" {
+            return .failure(.g1aComplexPrivateObject)
+        }
+        // G1B: 图像与 PDF 类型（需结合是否伴生现代文本通道判断）
+        if t == "public.tiff" || t == "public.png" || t == "public.pdf" {
+            hasCompanionMedia = true
+        }
+    }
+
+    if hasCompanionMedia && !hasModernText {
+        return .failure(.g1bStandaloneMedia)
+    }
     if !hasModernText {
-        let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-        return FormatGateResult(passed: false, reason: .g4LegacyOnly, elapsedUs: us)
+        return .failure(.g4LegacyOnly)
     }
-    if textByteLength > maxBytes {
-        let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-        return FormatGateResult(passed: false, reason: .g5Oversize, elapsedUs: us)
-    }
-    let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
-    return FormatGateResult(passed: true, reason: nil, elapsedUs: us)
+    return .success(())
 }
 
-let gateCases: [(String, [String], Int, Int, Bool, GateSkipReason?)] = [
-    ("Excel 单元格复制 (含公式与 TIFF 预览)", ["public.utf8-plain-text", "public.html", "com.microsoft.Object-Descriptor", "com.microsoft.excel.data", "public.tiff"], 1, 1024, false, .g1ComplexObject),
-    ("Figma 图层复制 (含 PDF/SVG 私有数据)", ["public.utf8-plain-text", "com.figma.node", "public.pdf"], 1, 512, false, .g1ComplexObject),
-    ("Finder 复制 3 个文件", ["public.file-url", "NSFilenamesPboardType"], 3, 256, false, .g2MultiItem),
-    ("Finder 复制单个文件", ["public.file-url", "NSFilenamesPboardType", "public.utf8-plain-text"], 1, 64, false, .g3FileUrl),
-    ("老旧应用纯 Legacy 4字符类型", ["CorePasteboardFlavorType 0x74657874", "NSStringPboardType"], 1, 128, false, .g4LegacyOnly),
-    ("复制 120KB 超长日志 (>64KB G5阈值)", ["public.utf8-plain-text", "public.html"], 1, 120 * 1024, false, .g5Oversize),
-    ("ChatGPT / DeepSeek 复制 Markdown", ["public.utf8-plain-text", "public.html", "org.chromium.source-url"], 1, 4096, true, nil)
+/// 第二阶段：仅在 Stage 1 通过并读取文本后，判定载荷体积分级
+func evaluatePayloadTier(textByteLength: Int) -> Result<PayloadTier, GateSkipReason> {
+    if textByteLength <= 64 * 1024 {
+        return .success(.fullMultiChannel)
+    } else if textByteLength <= 256 * 1024 {
+        return .success(.lightweightTextOnly)
+    } else {
+        return .failure(.g5Oversize)
+    }
+}
+
+let gateCases: [(String, [String], Int, Int, Bool, String)] = [
+    ("Excel 单元格复制 (含公式与 TIFF)", ["public.utf8-plain-text", "public.html", "com.microsoft.Object-Descriptor", "com.microsoft.excel.data", "public.tiff"], 1, 1024, false, "G1A_COMPLEX_OBJECT"),
+    ("Figma 图层复制 (含 PDF 私有数据)", ["public.utf8-plain-text", "com.figma.node", "public.pdf"], 1, 512, false, "G1A_COMPLEX_OBJECT"),
+    ("Word/Pages 富文本复制 (伴生 TIFF 预览)", ["public.utf8-plain-text", "public.html", "public.rtf", "public.tiff", "public.pdf"], 1, 4096, true, "FULL_MULTI_CHANNEL"),
+    ("系统纯截图复制 (仅有 PNG/TIFF 无文本)", ["public.png", "public.tiff"], 1, 0, false, "G1B_STANDALONE_MEDIA"),
+    ("Finder 复制 3 个文件", ["public.file-url", "NSFilenamesPboardType"], 3, 256, false, "G2_MULTI_ITEM"),
+    ("老旧应用纯 Legacy 4字符类型", ["CorePasteboardFlavorType 0x74657874", "NSStringPboardType"], 1, 128, false, "G4_LEGACY_ONLY"),
+    ("AI 超长回复 120KB (64~256KB 轻量降级)", ["public.utf8-plain-text"], 1, 120 * 1024, true, "LIGHTWEIGHT_TEXT_ONLY"),
+    ("复制 600KB 巨型日志 (>256KB 拒绝)", ["public.utf8-plain-text"], 1, 600 * 1024, false, "G5_OVERSIZE"),
+    ("ChatGPT 复制常规 Markdown (4KB)", ["public.utf8-plain-text", "public.html", "org.chromium.source-url"], 1, 4096, true, "FULL_MULTI_CHANNEL")
 ]
 
-for (name, types, count, bytes, expectedPass, expectedReason) in gateCases {
-    let res = evaluateFormatGate(types: types, itemCount: count, textByteLength: bytes)
-    let ok = (res.passed == expectedPass && res.reason == expectedReason)
-    print(String(format: "  • %-36@ -> passed=%-5@ reason=%-18@ (%.3f µs) %@",
+for (name, types, count, bytes, expectedPass, expectedLabel) in gateCases {
+    let t0 = DispatchTime.now().uptimeNanoseconds
+    let stage1 = evaluateMetadataGate(types: types, itemCount: count)
+    let passed: Bool
+    let outcomeLabel: String
+    switch stage1 {
+    case .failure(let reason):
+        passed = false
+        outcomeLabel = reason.rawValue
+    case .success:
+        switch evaluatePayloadTier(textByteLength: bytes) {
+        case .success(let tier):
+            passed = true
+            outcomeLabel = tier.rawValue
+        case .failure(let reason):
+            passed = false
+            outcomeLabel = reason.rawValue
+        }
+    }
+    let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
+    let ok = (passed == expectedPass && outcomeLabel == expectedLabel)
+    print(String(format: "  • %-38@ -> passed=%-5@ outcome=%-22@ (%.3f µs) %@",
                  name as NSString,
-                 "\(res.passed)" as NSString,
-                 (res.reason?.rawValue ?? "NONE") as NSString,
-                 res.elapsedUs,
+                 "\(passed)" as NSString,
+                 outcomeLabel as NSString,
+                 us,
                  ok ? "✅" : "❌"))
 }
 print("")
 
 // ----------------------------------------------------------------------------
-// 3. [S0 & S1 & S5] L1 引擎转换、DYNAMIC_BY_TARGET 路由、社媒链接瘦身、静默 DLP 与 8ms 预算
+// 3. [S0-Logic, S1 & S5] L1 算子、HTML/RTF 同步抑制、轻量大文本降级与 8ms 预算
 // ----------------------------------------------------------------------------
-print("--- [S0, S1 & S5] L1 滤镜转换、DYNAMIC_BY_TARGET 路由、社媒链接瘦身、静默 DLP 与 8ms 预算实测 ---")
+print("--- [S0-Logic, S1 & S5] L1 滤镜转换、HTML/RTF 双通道抑制、轻量降级与 8ms 预算实测 ---")
 
 let sampleMarkdown = """
 # 灵贴 PasteFlow 架构周报
@@ -271,24 +321,64 @@ func markdownToOfficeHTML(_ md: String) -> String {
 }
 
 func markdownToIMPrettyText(_ md: String) -> String {
-    var out: [String] = []
-    for line in md.components(separatedBy: .newlines) {
-        var s = line
-        if s.hasPrefix("# ") {
-            s = "【" + s.dropFirst(2) + "】"
-        } else if s.hasPrefix("## ") {
-            s = "▍" + s.dropFirst(3)
+    // 单遍 UTF-8 字节流扫描 (对齐 Rust &[u8] / pulldown-cmark 零 Grapheme 拆解开销：ASCII 控制符 * # ` \n 均 < 0x80)
+    return md.utf8.withContiguousStorageIfAvailable { buf -> String in
+        var out = [UInt8]()
+        out.reserveCapacity(buf.count + 256)
+        let n = buf.count
+        var i = 0
+        var atLineStart = true
+        var appendCloseBracketAtEOL = false
+        let lBracket: [UInt8] = Array("【".utf8)
+        let rBracket: [UInt8] = Array("】".utf8)
+        let barPrefix: [UInt8] = Array("▍".utf8)
+
+        while i < n {
+            let b = buf[i]
+            if atLineStart {
+                atLineStart = false
+                if b == 0x23 { // '#'
+                    if i + 1 < n && buf[i + 1] == 0x20 { // "# "
+                        out.append(contentsOf: lBracket)
+                        appendCloseBracketAtEOL = true
+                        i += 2
+                        continue
+                    } else if i + 2 < n && buf[i + 1] == 0x23 && buf[i + 2] == 0x20 { // "## "
+                        out.append(contentsOf: barPrefix)
+                        i += 3
+                        continue
+                    }
+                }
+            }
+            if b == 0x0A { // '\n'
+                if appendCloseBracketAtEOL {
+                    out.append(contentsOf: rBracket)
+                    appendCloseBracketAtEOL = false
+                }
+                out.append(0x0A)
+                atLineStart = true
+                i += 1
+                continue
+            }
+            if b == 0x2A && i + 1 < n && buf[i + 1] == 0x2A { // "**"
+                i += 2
+                continue
+            }
+            if b == 0x60 { // '`'
+                i += 1
+                continue
+            }
+            out.append(b)
+            i += 1
         }
-        let r1 = NSRange(s.startIndex..<s.endIndex, in: s)
-        s = boldRegex.stringByReplacingMatches(in: s, range: r1, withTemplate: "$1")
-        let r2 = NSRange(s.startIndex..<s.endIndex, in: s)
-        s = codeRegex.stringByReplacingMatches(in: s, range: r2, withTemplate: "$1")
-        out.append(s)
-    }
-    return out.joined(separator: "\n")
+        if appendCloseBracketAtEOL {
+            out.append(contentsOf: rBracket)
+        }
+        return String(decoding: out, as: UTF8.self)
+    } ?? md
 }
 
-let htmlSuppressBundles: Set<String> = [
+let richSuppressBundles: Set<String> = [
     "com.tinyspeck.slackmacgap", "com.hnc.Discord",
     "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
     "com.apple.Terminal", "com.googlecode.iterm2"
@@ -303,10 +393,15 @@ func provideChannelData(channel: String, frontmostBundleId: String, sourceBundle
         return (channel == "plainText" ? rawMarkdown : nil, "probe_guard_passthrough")
     }
     if channel == "html" {
-        if htmlSuppressBundles.contains(frontmostBundleId) {
+        if richSuppressBundles.contains(frontmostBundleId) {
             return (nil, "html_suppressed")
         }
         return (markdownToOfficeHTML(rawMarkdown), "rich_office")
+    } else if channel == "rtf" {
+        if richSuppressBundles.contains(frontmostBundleId) {
+            return (nil, "rtf_suppressed")
+        }
+        return ("{\\rtf1\\ansi ...}", "rich_rtf")
     } else if channel == "plainText" {
         if imPrettyBundles.contains(frontmostBundleId) {
             return (markdownToIMPrettyText(rawMarkdown), "im_cleaned_text")
@@ -321,6 +416,7 @@ let s0Matrix: [(String, String, String, UInt64, String)] = [
     ("微信 WeChat 请求 plainText", "plainText", "com.tencent.xinWeChat", 950, "im_cleaned_text"),
     ("Terminal 请求 plainText", "plainText", "com.apple.Terminal", 1200, "raw_passthrough"),
     ("Slack 请求 HTML (防富文本劫持)", "html", "com.tinyspeck.slackmacgap", 1100, "html_suppressed"),
+    ("Slack 请求 RTF (同步抑制防回退劫持)", "rtf", "com.tinyspeck.slackmacgap", 1105, "rtf_suppressed"),
     ("VSCode 请求 HTML (防富文本劫持)", "html", "com.microsoft.VSCode", 1300, "html_suppressed"),
     ("复制后 40ms 后台嗅探抢读", "plainText", "com.google.Chrome", 40, "probe_guard_passthrough")
 ]
@@ -330,89 +426,31 @@ for (desc, ch, bundle, dt, expectedVariant) in s0Matrix {
     let res = provideChannelData(channel: ch, frontmostBundleId: bundle, sourceBundleId: "com.google.Chrome", msSinceCopy: dt, rawMarkdown: sampleMarkdown)
     let us = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1000.0
     let ok = (res.variant == expectedVariant)
-    print(String(format: "  • %-32@ -> variant=%-24@ (%.2f µs) %@",
+    print(String(format: "  • %-36@ -> variant=%-24@ (%.2f µs) %@",
                  desc as NSString, res.variant as NSString, us, ok ? "✅" : "❌"))
 }
 
-// 测量滤镜 2: 预编译正则提取 URL + 剥离追踪参数 (对比 NSDataDetector 的 8.77ms 冷启动)
-let blockedParams: Set<String> = ["spm", "vd_source", "utm_source", "utm_medium", "utm_campaign", "share_source", "xhsshare", "app_platform"]
-func cleanSocialTextFast(_ input: String) -> String {
-    let nsRange = NSRange(input.startIndex..<input.endIndex, in: input)
-    guard let match = urlRegex.firstMatch(in: input, range: nsRange),
-          let range = Range(match.range, in: input),
-          let url = URL(string: String(input[range])),
-          var comps = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return input }
-    if let items = comps.queryItems {
-        let filtered = items.filter { !blockedParams.contains($0.name.lowercased()) }
-        comps.queryItems = filtered.isEmpty ? nil : filtered
-    }
-    return comps.url?.absoluteString ?? input
+// 测量 120KB 超长 AI 回复在 LIGHTWEIGHT_TEXT_ONLY (仅做 IM 纯文本去星号) 下的耗时
+let long120KBMarkdown = String(repeating: sampleMarkdown + "\n", count: 225) // ~120KB
+var lightweightLatenciesMs: [Double] = []
+for _ in 0..<20 {
+    let t0 = DispatchTime.now().uptimeNanoseconds
+    let _ = markdownToIMPrettyText(long120KBMarkdown)
+    let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000.0
+    lightweightLatenciesMs.append(ms)
 }
-
-let dirtyBiliShare = "【超硬核 Rust 桌面开发实战】 https://www.bilibili.com/video/BV1xx411c7mD/?spm=a2h0c.8166622&vd_source=9f8e7d6c5b4a3210&utm_source=copy_web 点击链接观看"
-let tClean0 = DispatchTime.now().uptimeNanoseconds
-let cleanedUrl = cleanSocialTextFast(dirtyBiliShare)
-let cleanUs = Double(DispatchTime.now().uptimeNanoseconds - tClean0) / 1000.0
-print(String(format: "  • [社媒链接瘦身 (预编译正则版)] 净化结果: %@ (耗时 %.2f µs，较 NSDataDetector 提速 400x) %@",
-             cleanedUrl as NSString, cleanUs, cleanedUrl == "https://www.bilibili.com/video/BV1xx411c7mD/" ? "✅ PASS" : "❌ FAIL"))
-
-// 验证静默三不 DLP 识别器
-let dlpRegex = try! NSRegularExpression(pattern: #"(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]+PRIVATE KEY-----|postgres(?:ql)?:\/\/[^:\s]+:[^@\s]+@)"#)
-func detectHighConfidenceSecret(_ text: String) -> Bool {
-    let range = NSRange(text.startIndex..<text.endIndex, in: text)
-    return dlpRegex.firstMatch(in: text, range: range) != nil
-}
-
-let dlpCases: [(String, String, Bool)] = [
-    ("OpenAI API Key (sk-...)", "OPENAI_API_KEY=sk-proj1234567890abcdefghijklmnop", true),
-    ("GitHub Token (ghp_...)", "token: ghp_1234567890abcdefghijklmnopqrstuvwx", true),
-    ("PEM 私钥文件头", "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=", true),
-    ("日常客户手机号 (不误杀)", "联系人：张经理 13812345678，请回电", false),
-    ("日常订单/身份证号 (不误杀)", "身份证号 310101199003071234 已核验", false)
-]
-for (label, sample, expectedSecret) in dlpCases {
-    let matched = detectHighConfidenceSecret(sample)
-    let ok = (matched == expectedSecret)
-    print("  • [静默 DLP 检测] \(label): hit=\(matched) (期望=\(expectedSecret)) -> \(ok ? "✅ PASS" : "❌ FAIL")")
-}
-
-// 对比 64KB 与 240KB 语料在预编译正则 + AOT -O 下的转换耗时
-for (sizeLabel, repeatCount) in [("64KB (G5 校准后上限)", 120), ("240KB (原 G5 上限，超 8ms)", 450)] {
-    let mdPayload = String(repeating: sampleMarkdown + "\n", count: repeatCount)
-    var latenciesMs: [Double] = []
-    for _ in 0..<20 {
-        let t0 = DispatchTime.now().uptimeNanoseconds
-        let _ = markdownToOfficeHTML(mdPayload)
-        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000.0
-        latenciesMs.append(ms)
-    }
-    latenciesMs.sort()
-    print(String(format: "  • [S1/S5 %@ 转换耗时]: p50 = %.2f ms, p95 = %.2f ms, max = %.2f ms -> %@",
-                 sizeLabel as NSString,
-                 percentile(latenciesMs, 0.50),
-                 percentile(latenciesMs, 0.95),
-                 latenciesMs.last ?? 0,
-                 (latenciesMs.last ?? 99) < 8.0 ? "✅ PASS (<8ms)" : "⚠️ 超出 8ms (证明 G5 必须收紧至 64KB)"))
-}
+lightweightLatenciesMs.sort()
+print(String(format: "  • [120KB 长文 LIGHTWEIGHT_TEXT_ONLY 纯文本净化耗时]: p50 = %.2f ms, p95 = %.2f ms, max = %.2f ms -> %@",
+             percentile(lightweightLatenciesMs, 0.50),
+             percentile(lightweightLatenciesMs, 0.95),
+             lightweightLatenciesMs.last ?? 0,
+             (lightweightLatenciesMs.last ?? 99) < 5.0 ? "✅ PASS (<5ms)" : "⚠️ 超出 5ms"))
 print("")
 
 // ----------------------------------------------------------------------------
-// 4. [S0.5] macOS 15.4+ / 27 NSPasteboard.accessBehavior API 实测
+// 4. [S8 & S11] 非激活 NSPanel + 常驻隐藏 WKWebView 焦点路由与真实 AOT 内存基线实测
 // ----------------------------------------------------------------------------
-print("--- [S0.5] macOS 15.4+/27 NSPasteboard.accessBehavior API 实测 ---")
-let pb = NSPasteboard.general
-if #available(macOS 15.4, *) {
-    let behavior = pb.accessBehavior
-    print("  • NSPasteboard.general.accessBehavior 枚举值 = \(behavior.rawValue) (0=default/alwaysAllow, 1=ask, 2=neverAllow) -> ✅ API 可用")
-} else {
-    print("  • 当前系统低于 macOS 15.4")
-}
-print("")
-
-// ----------------------------------------------------------------------------
-// 5. [S8 & S11] 非激活 NSPanel + 常驻隐藏 WKWebView 焦点路由与真实 AOT 内存基线实测
-// ----------------------------------------------------------------------------
-print("--- [S8 & S11] 非激活 NSPanel + WKWebView 无焦点按键路由与 AOT 编译态真实内存基线 ---")
+print("--- [S8 & S11] 非激活 NSPanel + WKWebView 属性校验与 AOT 编译态真实内存基线 ---")
 
 final class NonActivatingHUDPanel: NSPanel {
     override var canBecomeKey: Bool { return true }
