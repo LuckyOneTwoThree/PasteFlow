@@ -22,7 +22,10 @@ type NativeHandle = Option<Box<dyn std::any::Any + Send>>;
 
 /// 原生菜单栏句柄 (持有 NSStatusItem 强引用, 防释放)
 pub struct NativeMenuBar {
+    /// opaque 持有位 (P1-14 tauri setup 注入 objc2 Retained; 字段只保活, 不读取)
+    #[allow(dead_code)]
     status_item: NativeHandle,
+    #[allow(dead_code)]
     menu: NativeHandle,
     controller: Arc<MenuBarController>,
 }
@@ -70,7 +73,10 @@ impl NativeMenuBar {
 
 /// 原生 Toast 面板
 pub struct NativeToastPanel {
+    /// opaque 持有位 (P1-14 tauri setup 注入 objc2 Retained; 字段只保活, 不读取)
+    #[allow(dead_code)]
     panel: NativeHandle,
+    #[allow(dead_code)]
     label: NativeHandle,
     request: Mutex<Option<ToastRequest>>,
 }

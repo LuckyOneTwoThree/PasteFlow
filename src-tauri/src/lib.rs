@@ -14,6 +14,8 @@ pub mod hotkeys;
 pub mod toast;
 pub mod menu_bar;
 pub mod native_bridge;
+pub mod recipe;
+pub mod engine;
 
 pub fn run() {
     tracing_subscriber::fmt()

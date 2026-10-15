@@ -144,9 +144,10 @@ impl ClipboardOwner {
 
     /// Re-own 补挂触发 (P0 exp5 / §1.4.2):
     /// 返回新代数; 达上限时返回 None (降级 StaticUnmanaged)
+    /// max_generations = 补挂次数上限 (3 = 允许补挂 3 次)
     pub fn next_generation(&self, max_generations: usize) -> Option<usize> {
         let g = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
-        if g < max_generations {
+        if g <= max_generations {
             Some(g)
         } else {
             None
@@ -219,7 +220,8 @@ mod tests {
         let o = ClipboardOwner::new();
         assert_eq!(o.next_generation(3), Some(1));
         assert_eq!(o.next_generation(3), Some(2));
-        assert_eq!(o.next_generation(3), None); // 达上限
+        assert_eq!(o.next_generation(3), Some(3));
+        assert_eq!(o.next_generation(3), None); // 达上限 (补挂 3 次后)
     }
 
     #[test]

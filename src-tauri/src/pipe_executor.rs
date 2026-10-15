@@ -87,7 +87,7 @@ pub fn is_probe_guard(ctx: &ProbeGuardContext) -> bool {
     ctx.elapsed_ms < 150 && ctx.frontmost_bundle == ctx.source_bundle
 }
 
-/// Re-own 补挂代数上限 (P0 exp4 推论: <=3 代后降级静态供给)
+/// Re-own 补挂次数上限 (P0 exp4 推论: 补挂 <= 3 次后降级静态供给)
 pub const REOWN_MAX_GENERATIONS: usize = 3;
 /// Re-own 补挂等待窗口: 全通道供给完成或 300ms 超时取先到 (P0 exp5)
 pub const REOWN_SETTLE_WINDOW: Duration = Duration::from_millis(300);
@@ -116,10 +116,11 @@ impl ReownState {
         !self.triggered && self.generation < REOWN_MAX_GENERATIONS
     }
 
-    /// 标记已补挂
+    /// 标记已补挂 (进入新一代补挂周期, 复位供下一次判定)
     pub fn mark_triggered(&mut self) {
-        self.triggered = true;
         self.generation += 1;
+        self.served_channels = 0;
+        self.triggered = false; // 新周期可再判定
     }
 
     /// 是否已达上限 (降级静态供给)
@@ -151,6 +152,7 @@ impl PipeExecutor {
 
     /// 主路由 (P0 exp1 变体判定已验证与 §3.2 决策树一致):
     /// 输入原始 source (Markdown 或普通文本), 输出三通道供给方案
+    /// generation = 已补挂次数 (0 = 原始挂载); 超过上限则降级静态纯转发
     pub fn route(&self, source_text: &str, target_bundle: &str, generation: usize) -> ServePlan {
         let dlp_action = self.dlp.detect(source_text);
         if generation >= REOWN_MAX_GENERATIONS {
