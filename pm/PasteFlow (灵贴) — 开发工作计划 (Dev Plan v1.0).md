@@ -56,6 +56,38 @@
 * **风险 R-P0-1**：Slack / Discord 不回退 `plainText` → 已有兜底方案（`<pre>` 转义源码包），不阻塞计划。
 * **风险 R-P0-2**：`WKWebView` 在 `NonActivatingHUDPanel` 内收键异常（macOS 版本差异）→ 降级为 HUD 内隐藏 `NSTextField` 承接按键再转发 JS，仍不阻塞 P1，仅影响 P2 排期微调。
 
+### 1.4 P0 冒烟实测结论与架构冲击（2026-10-15，`spike/step0b_e2e.swift`）
+
+> 本节为 P0-1 / P0-3 的实测产出。**核心架构假说被部分证伪**，但补救路径已验证可行。实测原件见 Master Spec 附录 A.13。
+
+#### 1.4.1 实验矩阵与结果
+
+| 实验 | 方法 | 实测结果 | 判定 |
+|---|---|---|---|
+| **exp1 跨进程延迟供给 + 路由** | serve 挂载 Provider（html/rtf/plainText）+ 50ms 内部抢读 | +60ms 抢读命中 `probe_guard_passthrough` ✅；但 +339/342ms 被第三方嗅探读走全部通道后 `pasteboardFinishedWithDataProvider` 即触发 | Probe Guard 有效；**嗅探威胁实证** |
+| **exp2 跨应用通道协商** | 激活 WeChat / Lark / Cursor / Terminal / Notion 逐个读取 | 5 应用 × 3 通道读取**全程零 provider 回调**，读到数据均为嗅探者固化值 | **per-type 首读冻结实证** |
+| **exp3 决定性：同 type 重复读取** | serve（noguard）+ `probe-plain` 连续多应用读取 | plainText 仅在挂载后被嗅探者读 1 次（+109ms `probe_guard_passthrough`）；后续 TextEdit/WeChat 前台读取全部命中缓存、**provider 零重入** | **「每次回调按 FrontmostApp 实时分支」不成立** |
+| **exp4 拒供是否重入** | `RefusingProvider` 首次回调不写数据 | 拒供后**不再重新回调**，后续真实读取只得 `nil` | **最坏情形：首读冻结含空值，拒供不能反制嗅探** |
+| **exp5 Re-own 补挂救活** | 首次供给后自动 `clearContents()+writeObjects()` 挂载下一代 Provider | **G1→G10 每一代均被真实消费方回调**，`frontmost` 随前台精确切换（TextEdit/WeChat），probe 读到 GEN4/GEN9 逐代递增 | ✅ **补挂救活延迟供给，实时分支恢复** |
+
+**附带发现**：① 系统写入会自动补全 `public.utf16-external-plain-text` 别名（印证铁律 R3，别名无需自注册）；② **本机存在 ≥3 个后台剪贴板嗅探者**（Obsidian / TRAE CN / Gemini 在挂载后 60–340ms 内全通道抢读），不是长尾风险而是常态。
+
+#### 1.4.2 架构冲击（待 Master Spec v1.5 裁决修订）
+
+* **D5（FrontmostApp 启发式）修订必要性**：「Provider 回调时 O(1) 实时分支」仅在**首次回调属于真实粘贴**时成立。一旦嗅探者抢先触发首读，通道内容即被固化为其时点分支（且 exp4 证明拒供只会固化空值）。
+* **主补救方案（P1 设计输入）**：**Probe-Guard 触发 Re-own 补挂**——当检测到首读命中 `<150ms` 抢读护栏（`elapsed < 150ms && frontmost == SourceApp`）时，等待**全部声明通道供给完成或 300ms 超时**（取先到者）后重新 `clearContents()+writeObjects()` 挂载新一代 Provider，恢复按目标应用实时分支。
+* **补挂边界约束（exp4/exp5 推论）**：① 补挂次数 ≤ 3 代，连续嗅探场景降级为静态供给（路线 B）不再补挂，防无限滚代；② 补挂产生的 `changeCount` 递增必须登记 `RecentInternalWrites` 短路，防 `DoubleCopyDetector` 误判为外部双击复制；③ 一次 `⌘V` 消费禁止混合代际数据（故补挂时机必须等待全通道供给完成，否则慢速消费方会拿到 G(n) plainText + G(n+1) html）。
+
+#### 1.4.3 对 P1 / P2 任务的影响
+
+| 任务 | 影响与修订 |
+|---|---|
+| **P1-7 `PipeExecutor`** | 路由决策树增补「首读后 Re-own 补挂」触发判断；实测 frontmost 分支逻辑正确（exp1 变体判定准确） |
+| **P1-8 `ClipboardOwner`** | 新增 Re-own 补挂机制（≤3 代、全通道供给完成或 300ms 后补挂、内部写入短路登记） |
+| **P1-10 `DoubleCopyDetector`** | 必须屏蔽补挂造成的 `changeCount` 自增，避免误触发双击还原/HUD |
+| **P2-8 IPC** | `servedHistory` 记录需区分「sniffer 抢读固化」与「真实粘贴供给」，诊断看板展示补挂代数 |
+| **§8.5 真机回归** | 新增断言：嗅探者抢读后真实 `⌘V` 仍按目标应用正确分支（补挂生效） |
+
 ---
 
 ## 2. P1 — 引擎底座：交付 v0.1.0 极简菜单栏引爆版（~1 周）
@@ -154,12 +186,13 @@
 
 | 编号 | 风险 | 影响阶段 | 概率 | 缓解与止损 |
 |---|---|---|---|---|
-| R-1 | Slack/Discord 收到 `nil` 不回退 `plainText` | P0 / P1-7 | 中 | `<pre>` 转义源码兜底（TDD §3.4），已在设计内 |
+| R-1 | Slack/Discord 收到 `nil` 不回退 `plainText` | P0 / P1-7 | 中 | `<pre>` 转义源码兜底（TDD §3.4），已在设计内（本机未装 Slack，留待真机回归验证） |
 | R-2 | `NonActivatingHUDPanel` + `WKWebView` 收键异常 | P0 / P2-2 | 中 | 降级隐藏 `NSTextField` 承接按键转发 JS；不阻塞 P1 |
 | R-3 | macOS 15.4+ `accessBehavior` 用户设为 `ask/neverAllow` | 全程 | 中 | §8.12 引导卡（UI Spec §2.4）；`detectPatterns` 减少误触发 |
-| R-4 | Provider 回调被第三方剪贴板工具并发读取/接管 | P1-8 / P2 | 低 | §8.6 共存策略：绝不反抢；`RecentInternalWrites` 防死循环 |
+| R-4 | Provider 回调被第三方剪贴板工具并发读取/接管 | P1-8 / P2 | **高（已实证）** | exp1–4 证实嗅探者首读冻结通道内容；**缓解 = Re-own 补挂**（§1.4.2 主方案），禁反抢、`RecentInternalWrites` 防死循环 |
 | R-5 | L3 流式注入误喷/撤销栈碎裂 | P3-1 | 低 | 默认 HUD 预览 + 原子粘贴；打字机注入仅 Tier 1 Opt-in 且三重安全栏 |
 | R-6 | 命名冲突（`alfred-pasteflow`） | 发布前 | 低 | D6：GitHub Org `PasteFlowApp` 区分，或启用 `PasteMorph` 备选名 |
+| **R-7** | **per-type 首读冻结击穿 DYNAMIC_BY_TARGET 实时分支**（exp3/4 已证实） | P1-7/P1-8 | **高（已实证）** | Re-own 补挂（exp5 已验证救活）；≤3 代封顶、补挂全通道供给后执行、内部写入短路；连续嗅探降级静态供给（路线 B） |
 
 ## 7. 交付物清单 (Deliverables Checklist)
 

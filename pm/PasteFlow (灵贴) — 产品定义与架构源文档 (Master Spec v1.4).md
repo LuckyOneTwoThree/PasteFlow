@@ -792,6 +792,31 @@ export interface ClipboardItem {
     • [Stage 2 - 挂载常驻隐藏 WKWebView 后本进程内存 (v0.1.5 含 HUD 态)]: phys_footprint = 53.53 MB, RSS = 87.25 MB (WebView 本进程增量 +6.20 ~ +7.13 MB)
   ```
 
+### A.13 Step 0B 跨进程 E2E 冒烟实测（2026-10-15，`spike/step0b_e2e.swift`，macOS 27 真机）
+
+> **⚠️ 架构级实证修正**：本节实测**部分证伪** §3.2「Provider 回调时 O(1) `FrontmostApp` 实时分支」在存在剪贴板嗅探者环境下的普适性，并验证「Re-own 补挂」为有效补救。完整实验矩阵与 P1 设计输入见《Dev Plan v1.0 §1.4》。本文档 §3.2 / D5 的正式修订待 Master Spec v1.5 裁决。
+
+* **测试脚本**：`spike/step0b_e2e.swift`（`swiftc -O`，serve / probe / probe-plain / serve-refuse / serve-reown 五模式）。
+* **环境备注**：本机未安装 Word / Slack / VSCode / Pages，富文本与抑制目标以 TextEdit / Notion / Lark / Cursor / Terminal / WeChat 替代；R-1（Slack `nil` 回退）留待装机后真机回归。
+* **实测结论**：
+
+| 编号 | 实验 | 结论 | 状态 |
+|---|---|---|---|
+| **S0-E2E-1** | 跨进程延迟供给 + Probe Guard | `+60ms` 内部抢读正确命中 `probe_guard_passthrough`；变体路由判定（`rich_office` / `im_cleaned_text` / `raw_passthrough` / `html_suppressed`）逻辑与 §3.2 决策树一致 | ✅ 通过 |
+| **S0-E2E-2** | 跨应用通道协商 | 5 应用 × 3 通道读取全程零 Provider 回调，读到的均为第三方嗅探者固化值 | ⚠️ 嗅探威胁实证 |
+| **S0-E2E-3** | **同 type 重复读取（决定性）** | **`provideDataForType` 对每个 type 仅回调一次，首读后固化，后续读取零重入**——「每次回调按 `FrontmostApp` 实时选择返回版本」（§3.2 第 2 条）在嗅探者存在时不成立 | ❌ 证伪（普适性） |
+| **S0-E2E-4** | **拒供是否重入（决定性）** | 首次回调不写入数据时**不再重新回调**，后续真实粘贴只得 `nil`——「返回 `nil` 引导回退」（§3.2 第 3 条）仅对首个读取方生效，拒供不能反制嗅探 | ❌ 证伪（加固前语义） |
+| **S0-E2E-5** | **Re-own 补挂救活（决定性）** | 首次供给后自动 `clearContents()+writeObjects()` 挂载下一代 Provider，**每一代均被真实消费方重新回调**，`frontmost` 随前台精确切换，代际数据逐代递增 | ✅ **补救方案验证通过** |
+
+* **附带发现**：
+  1. 系统 `writeObjects` 会自动补全 `public.utf16-external-plain-text` 等别名（印证 §8.3 铁律 R3：仅注册现代 UTI 即可）。
+  2. **本机常态存在 ≥3 个后台剪贴板嗅探者**（挂载后 60–340ms 内全通道抢读，实测捕获 Obsidian / TRAE CN / Gemini），嗅探抢读不是长尾风险而是普遍环境噪声。
+  3. 一次 `⌘V` 消费可能混合代际通道数据（慢速消费方跨代读取），故补挂必须等待全通道供给完成或 300ms 超时后执行。
+* **待 Master Spec v1.5 裁决项**：
+  1. §3.2 升级为「**Probe-Guard 触发 Re-own 补挂**」主方案（≤3 代封顶，连续嗅探降级为路线 B 静态多通道供给；补挂 `changeCount` 登记 `RecentInternalWrites` 防 `DoubleCopyDetector` 误判）。
+  2. §3.2 第 3 条 `nil` 抑制语义修订：仅首个读取方受影响，实际生效范围需在装机后以 Slack/VSCode 真机回归重新校准（R-1）。
+  3. P2 诊断看板（§11.4）需区分「sniffer 抢读固化」与「真实粘贴供给」并展示补挂代数。
+
 ## 附录 B：架构与产品已决议项登记表 (Resolved Decisions Register)
 
 | 编号 | 决策议题 | 最终生效决议 | 核心依据与工程约束 | 关联章节 |
