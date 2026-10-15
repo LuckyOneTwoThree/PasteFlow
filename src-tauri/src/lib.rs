@@ -11,6 +11,9 @@ pub mod clipboard_owner;
 pub mod double_copy;
 pub mod materializer;
 pub mod hotkeys;
+pub mod toast;
+pub mod menu_bar;
+pub mod native_bridge;
 
 pub fn run() {
     tracing_subscriber::fmt()
