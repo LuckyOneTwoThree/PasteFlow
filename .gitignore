@@ -1,8 +1,12 @@
+# Rust build artifacts
+/target/
+**/target/
+
 # macOS
 .DS_Store
 
-# Agent workspace artifacts (local memory, tool results)
-.workbuddy/
-
-# Obsidian workspace state (personal, not part of the product repo)
-.obsidian/
+# Tooling
+/.idea/
+/.vscode/
+/.obsidian/
+/.workbuddy/

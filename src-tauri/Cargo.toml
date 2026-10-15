@@ -1,0 +1,46 @@
+[package]
+name = "pasteflow"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+
+[lib]
+name = "pasteflow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "pasteflow"
+path = "src/main.rs"
+
+# v0.1.0 极简版依赖集 (Dev Plan P1): 仅核心引擎所需
+# - 不含 rusqlite (SQLite/FTS5 -> v0.1.5 P2 抽屉)
+# - 不含 enigo (L3 注入 -> v0.1.5 P3)
+# - 不含 scraper/url (L3 流式网页清洗 -> v0.1.5 P3)
+[dependencies]
+tauri = { version = "2.1", features = ["tray-icon"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.40", features = ["rt-multi-thread", "sync", "time", "macros", "signal"] }
+parking_lot = "0.12"
+blake3 = "1.5"
+regex = "1.11"
+pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = { version = "0.2", features = ["NSArray", "NSData", "NSString", "NSDictionary"] }
+objc2-app-kit = { version = "0.2", features = [
+    "NSPasteboard",
+    "NSPasteboardItem",
+    "NSWorkspace",
+    "NSRunningApplication",
+    "NSPanel",
+    "NSWindow",
+    "NSApplication"
+] }
+libc = "0.2"
+
+[dev-dependencies]
+serde_json = "1.0"
