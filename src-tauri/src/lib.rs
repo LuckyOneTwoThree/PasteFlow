@@ -23,6 +23,7 @@ pub mod hud_state;
 pub mod drawer;
 pub mod stack;
 pub mod recipe_import;
+pub mod ipc;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 
@@ -48,10 +49,24 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
     tracing::info!("PasteFlow engine starting (v0.1.0, zero-webview)");
 
     let state = Arc::new(EngineState::new());
+    // P2-8 IPC 状态 (storage + stack + drawer + recipes)
+    let ipc_state = ipc::IpcState::new(
+        storage::HistoryDb::in_memory().expect("in-memory history db"),
+        recipe::RecipeStore::with_builtin().expect("builtin recipes"),
+    );
 
     let builder = tauri::Builder::default();
     let state_for_setup = state.clone();
     builder
+        .manage(ipc_state)
+        .invoke_handler(tauri::generate_handler![
+            ipc::cmd_search_history,
+            ipc::cmd_toggle_pin_item,
+            ipc::cmd_set_stack_mode,
+            ipc::cmd_consume_stack_queue,
+            ipc::cmd_import_pipe_recipe,
+            ipc::cmd_list_pipe_recipes,
+        ])
         .setup(move |app| {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;

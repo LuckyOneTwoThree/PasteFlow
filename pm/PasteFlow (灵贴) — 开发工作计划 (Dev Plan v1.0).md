@@ -161,10 +161,11 @@
 | **P2-5** | `drawer.rs`：类型胶囊过滤（All/Markdown/Link/Code/Image，按 tags_json/primary_type 匹配）+ Before/After 就地预览切换 + DrawerViewModel（检索由 `HistoryDb::search` 负责）7 测试 | ✅ 7/7 |
 | **P2-6** | `stack.rs`：`StackQueue`（`⌥⇧S` 开关、入队、拖拽排序、单条移除）+ 三种一键消费 `JOIN_NEWLINE`（换行拼接）/ `DEDUP_NUMBERED`（去重编号，中文验证）/ `L3_AI_SUMMARY`（P3 预留不清空队列）9 测试，语义对齐 IPC Spec `cmd_consume_stack_queue` | ✅ 9/9 |
 | **P2-9** | `recipe_import.rs`：社区配方严格校验（`deny_unknown_fields` = `additionalProperties:false`、`providerTimeoutMs ≤ 8`、`regex_pipeline` 正则预编译 + flags `^[imsU]*$`、steps ≤ 16、`ownChannels` 必含 `plainText` 且去重、id/version/category/tier 枚举约束）；`llm_stream` 配方未确认审查 → `PROMPT_REVIEW_REQUIRED`（IPC Spec §3.3 错误码），非法配方 → `RECIPE_SCHEMA_INVALID`；16 测试 | ✅ 16/16 |
+| **P2-8** | `ipc.rs`：IPC Spec §3 DTO（ClipboardItemDto 240 字符摘要 + tags 解析）+ 核心逻辑（search_history 全量命中分页 total 精确 / toggle_pin / set_stack_mode / consume_stack / import_recipe 错误码映射）+ 6 个 Tauri Commands 注册进 `lib.rs`（`cmd_search_history` / `cmd_toggle_pin_item` / `cmd_set_stack_mode` / `cmd_consume_stack_queue` / `cmd_import_pipe_recipe` / `cmd_list_pipe_recipes`），`IpcState` 接入 storage/stack/drawer/recipes；9 测试（测试驱动修复：total 计数被 `limit+offset` 截断 → 改全量检索内存分页） | ✅ 9/9 |
 
-**P2 测试门禁**：222 全绿（lib 181 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
+**P2 测试门禁**：230 全绿（lib 189 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
 
-**下一步**：P2-7 主面板（Tab 1 滤镜商店 / Tab 2 诊断看板 / Tab 3 设置）→ P2-8 IPC 联通（Commands/Events 全量，含 `cmd_import_pipe_recipe` 接线）。
+**下一步**：P2-1 收尾（双击 ⌘C⌘C → Re-own + HUD 唤醒全链路）→ P2-7 主面板（Tab 1 滤镜商店 / Tab 2 诊断看板 / Tab 3 设置）。
 
 ---
 
