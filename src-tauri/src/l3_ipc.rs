@@ -266,7 +266,7 @@ pub fn cmd_set_llm_config(
 
 /// 一次性原子写入纯文本（TOCTOU: clearContents 后立即 setString；登记内部写入防误判）
 #[cfg(target_os = "macos")]
-fn write_plain_to_pasteboard(text: &str, owner: std::sync::Arc<crate::clipboard_owner::ClipboardOwner>) {
+pub fn write_plain_to_pasteboard(text: &str, owner: std::sync::Arc<crate::clipboard_owner::ClipboardOwner>) {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
     use objc2_foundation::NSString;
     unsafe {
@@ -280,7 +280,7 @@ fn write_plain_to_pasteboard(text: &str, owner: std::sync::Arc<crate::clipboard_
 }
 
 #[cfg(not(target_os = "macos"))]
-fn write_plain_to_pasteboard(
+pub fn write_plain_to_pasteboard(
     _text: &str,
     _owner: std::sync::Arc<crate::clipboard_owner::ClipboardOwner>,
 ) {

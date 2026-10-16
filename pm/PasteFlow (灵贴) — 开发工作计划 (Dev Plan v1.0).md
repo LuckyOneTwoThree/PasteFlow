@@ -218,10 +218,11 @@
 | **P3-1 收尾** | `l3.rs` 网络层：`SseParser`（增量喂入 `data:` 行 → content delta，OpenAI `choices[0].delta.content` 与 Ollama `response` 双格式兼容，跨片段行拼接，`[DONE]` 置位）、`HttpProvider`（ureq + OpenAI 兼容 `chat/completions` SSE 流式、Bearer BYOK、8MB 流上限）、`StreamRegistry`（streamId → 原子取消标志，`cancel` 即时熔断）、`L3Runtime`（BYOK 配置 + 注册表）、`run_l3` 改回调式 Provider + `on_delta` 返回 `false` 熔断 + 真实计时 `finish_at`、`probe_ollama` 真实 HTTP（3s 超时）；`l3_ipc.rs`：`cmd_run_l3_stream`（后台线程 + 逐块 emit `pasteflow://l3-stream-chunk` 到 micro-hud/drawer）、`cmd_cancel_l3_stream`、`cmd_l3_commit_paste`（一次性原子粘贴 + 内部写入登记）、`cmd_probe_ollama`/`cmd_set_llm_config`；`dist/hud.html`：L3 流式预览展开态（呼吸灯状态条 + 140px 滚动预览 + Esc 取消/Enter 确认粘贴，流式态按键全吞不泄漏）；`hud.rs`：`HudL3Slot` 语义 + 槽位 3 得体打工人/槽位 4 智能汇总 + 唤醒载荷携带 `source_text` | ✅ 16/16 |
 | **P3-3 验收** | `l1_snapshots` 补 9 条黄金快照：网页牛皮癣（样式/属性/span/脚注/版权尾巴剥离 + 空行收敛）、PDF 断行缝合（软回车缝合/硬段落保留/CJK 边界不插空格）、开发者瑞士军刀（6 类检测/JSON 确定性/curl→fetch 保 URL/时间戳 ISO 8601） | ✅ 20/20 |
 | **P3-2** | 贪吃蛇智能汇总后端闭环：`l3_ipc::spawn_l3_stream` 抽出为可复用核心（validate → DLP → 提示词 → 注册流 → 后台线程 `run_l3` 逐块 emit → 完成载荷入缓存），`cmd_run_l3_stream` 薄包装转发；`ipc.rs` `cmd_consume_stack_queue` 新增 `ConsumeMode::L3AiSummary` 分支（`stack_source_text` 空行拼接队列 → `summary_to_prompt_type` 映射会议纪要/对比表格/待办清单 → `spawn_l3_stream` 返回真实 `streamId`，队列保持不清空）；HUD 得体打工人/智能汇总槽位 L3 语义已在 P3-1 收尾接入 | ✅ 303 全绿（+2 映射/拼接单测） |
+| **P3-2 收尾（抽屉/贪吃蛇面板 UI）** | `drawer_window.rs`：`drawer` 窗口装配（360px 无边框透明 + 磁吸停靠右缘 `dock_metrics`，`toggle` 显隐复用不销毁，`cmd_drawer_visible`）+ 菜单「剪贴板历史」接抽屉；`dist/drawer.html`：搜索栏（FTS5 150ms 防抖）+ 5 类型胶囊过滤 + 🐍 贪吃蛇面板（队列列表拖拽排序/单条移除、`换行合并粘贴 ⌘↩`、`去重编号列表`、`✨ AI 智能汇总` 三选一下拉→`L3_AI_SUMMARY`）+ L3 流式预览（Esc 取消/↩ 一次性原子上屏）+ 84px 历史卡片（相对时间/徽章/置顶/Before-After 就地预览）；`ipc.rs`：`IpcState` 历史库与队列改共享句柄（`Arc<Mutex<..>>`），`record_copy_entry` 复制事件→入库+入队，`cmd_list_stack`/`cmd_remove_stack_item`/`cmd_reorder_stack_items` 面板命令，`consume_stack` 返回 `mergedText` 由命令层原子写剪贴板；lib.rs tick 链路接数据源 + `pasteflow://stack-updated` 广播 | ✅ 308 全绿（+5 面板/入队单测） |
 
-**P3 测试门禁**：303 全绿（lib 253 + guardrails 21 + hotkey_registry 9 + l1_snapshots 20）。
+**P3 测试门禁**：308 全绿（lib 258 + guardrails 21 + hotkey_registry 9 + l1_snapshots 20）。
 
-**下一步**：P3-2 收尾（贪吃蛇面板 UI「AI 智能汇总」下拉三选一接入 `cmd_consume_stack_queue`，归属 P2-5 抽屉面板）→ P3-4 全量 E2E 回归 → P3-5 发布链路（前置：D6 品牌名裁决 + D3 Developer ID）。
+**下一步**：P3-4 全量 E2E 回归（§8.5 两层兼容性 + §11.4 诊断看板脱敏周报导出验收）→ P3-5 发布链路（前置：D6 品牌名裁决 + D3 Developer ID）。
 
 ### 4.2 🏁 v0.1.5 发布里程碑出口标准
 

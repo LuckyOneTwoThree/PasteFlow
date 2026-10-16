@@ -13,7 +13,7 @@ use crate::recipe_import::{import_recipe as import_recipe_strict, CommunityRecip
 use crate::stack::{ConsumeMode, ConsumeResult, StackQueue, SummaryPromptType};
 use crate::storage::{ClipboardItem, HistoryDb};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 // —— IPC 错误码 (IPC Spec §3.3) ——
 
@@ -119,6 +119,44 @@ pub struct SetStackModeReturn {
     pub count: usize,
 }
 
+/// StackEntryDto (IPC Spec §4 `pasteflow://stack-updated` items)
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackEntryDto {
+    pub id: String,
+    pub plain_text: String,
+    pub source_app_name: String,
+    pub index: usize,
+}
+
+impl From<(usize, &crate::stack::StackEntry)> for StackEntryDto {
+    fn from((index, e): (usize, &crate::stack::StackEntry)) -> Self {
+        Self {
+            id: e.id.clone(),
+            plain_text: e.plain_text.clone(),
+            source_app_name: e.source_app_name.clone(),
+            index,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListStackReturn {
+    pub active: bool,
+    pub items: Vec<StackEntryDto>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StackItemArgs {
+    pub index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StackReorderArgs {
+    pub from: usize,
+    pub to: usize,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ConsumeStackArgs {
     pub mode: ConsumeMode,
@@ -131,6 +169,9 @@ pub struct ConsumeStackReturn {
     pub consumedCount: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub streamId: Option<String>,
+    /// JOIN_NEWLINE / DEDUP_NUMBERED 合并结果（命令层据此原子写剪贴板）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mergedText: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,18 +188,24 @@ pub struct ImportRecipeReturn {
 // —— IPC 状态 (由 lib.rs manage) ——
 
 pub struct IpcState {
-    pub history: Mutex<HistoryDb>,
-    pub stack: Mutex<StackQueue>,
+    /// 共享历史库 (引擎复制事件也写入, 抽屉检索同一份数据)
+    pub history: Arc<Mutex<HistoryDb>>,
+    /// 共享贪吃蛇队列 (引擎复制事件入队, 面板消费)
+    pub stack: Arc<Mutex<StackQueue>>,
     pub drawer: Mutex<DrawerViewModel>,
     pub imported_recipes: Mutex<Vec<CommunityRecipe>>,
     pub builtin_recipes: RecipeStore,
 }
 
 impl IpcState {
-    pub fn new(history: HistoryDb, builtin: RecipeStore) -> Self {
+    pub fn new(
+        history: Arc<Mutex<HistoryDb>>,
+        stack: Arc<Mutex<StackQueue>>,
+        builtin: RecipeStore,
+    ) -> Self {
         Self {
-            history: Mutex::new(history),
-            stack: Mutex::new(StackQueue::new()),
+            history,
+            stack,
             drawer: Mutex::new(DrawerViewModel::new()),
             imported_recipes: Mutex::new(Vec::new()),
             builtin_recipes: builtin,
@@ -204,7 +251,7 @@ pub fn set_stack_mode(stack: &mut StackQueue, active: bool) -> SetStackModeRetur
 }
 
 /// 一键消费贪吃蛇队列 (IPC Spec `cmd_consume_stack_queue`)
-/// 前两种模式同步合并写入剪贴板（写入由调用方/命令层负责），此函数返回合并结果并清空队列。
+/// 前两种模式同步合并文本（写剪贴板由命令层负责），此函数返回合并结果并清空队列。
 pub fn consume_stack(stack: &mut StackQueue, args: &ConsumeStackArgs) -> IpcResult<ConsumeStackReturn> {
     if stack.is_empty() {
         return Err(IpcError::new("STACK_EMPTY", "stack queue is empty"));
@@ -213,7 +260,37 @@ pub fn consume_stack(stack: &mut StackQueue, args: &ConsumeStackArgs) -> IpcResu
     Ok(ConsumeStackReturn {
         consumedCount: r.consumed_count,
         streamId: r.stream_id,
+        mergedText: r.merged_text,
     })
+}
+
+/// 贪吃蛇队列快照 (UI Spec §4.2 面板列表)
+pub fn list_stack(stack: &StackQueue) -> ListStackReturn {
+    ListStackReturn {
+        active: stack.is_active(),
+        items: stack
+            .entries()
+            .iter()
+            .enumerate()
+            .map(StackEntryDto::from)
+            .collect(),
+    }
+}
+
+/// 单条移除 (UI Spec §4.2)
+pub fn remove_stack_item(stack: &mut StackQueue, index: usize) -> IpcResult<ListStackReturn> {
+    if stack.remove_at(index).is_none() {
+        return Err(IpcError::new("STACK_ITEM_NOT_FOUND", "index out of range"));
+    }
+    Ok(list_stack(stack))
+}
+
+/// 拖拽排序 (UI Spec §4.2)
+pub fn reorder_stack_items(stack: &mut StackQueue, from: usize, to: usize) -> IpcResult<ListStackReturn> {
+    if !stack.reorder(from, to) {
+        return Err(IpcError::new("STACK_ITEM_NOT_FOUND", "index out of range"));
+    }
+    Ok(list_stack(stack))
 }
 
 /// 贪吃蛇队列文本拼接（L3 汇总输入源, 片段间空行分隔）
@@ -233,6 +310,31 @@ pub fn summary_to_prompt_type(p: Option<SummaryPromptType>) -> crate::l3::Prompt
         SummaryPromptType::ComparisonTable => crate::l3::PromptType::ComparisonTable,
         SummaryPromptType::TodoList => crate::l3::PromptType::TodoList,
     }
+}
+
+/// 外部复制事件 → 历史入库 + 贪吃蛇入队（抽屉数据源, UI Spec §4.2/§4.3）
+///
+/// 返回 `true` 表示已入库；空白文本不入库。贪吃蛇仅在收集槽开启时入队。
+pub fn record_copy_entry(
+    history: &Mutex<HistoryDb>,
+    stack: &Mutex<StackQueue>,
+    source_text: &str,
+    source_app_name: &str,
+) -> bool {
+    if source_text.trim().is_empty() {
+        return false;
+    }
+    let item = crate::storage::make_item(source_text, source_app_name, None);
+    let _ = history.lock().unwrap().insert_item(&item);
+    let mut st = stack.lock().unwrap();
+    if st.is_active() {
+        st.push(crate::stack::StackEntry {
+            id: item.id.clone(),
+            plain_text: source_text.to_string(),
+            source_app_name: source_app_name.to_string(),
+        });
+    }
+    true
 }
 
 /// 社区配方导入（严格校验 + llm_stream 审查确认）
@@ -281,6 +383,7 @@ pub fn cmd_consume_stack_queue(
     app: tauri::AppHandle,
     state: tauri::State<'_, IpcState>,
     l3: tauri::State<'_, std::sync::Arc<crate::l3_ipc::L3IpcState>>,
+    engine: tauri::State<'_, std::sync::Arc<crate::engine::EngineState>>,
     args: ConsumeStackArgs,
 ) -> IpcResult<ConsumeStackReturn> {
     let mut stack = state.stack.lock().unwrap();
@@ -297,9 +400,41 @@ pub fn cmd_consume_stack_queue(
         return Ok(ConsumeStackReturn {
             consumedCount: consumed_count,
             streamId: Some(stream_id),
+            mergedText: None,
         });
     }
-    consume_stack(&mut stack, &args)
+    let r = consume_stack(&mut stack, &args)?;
+    // IPC Spec: JOIN_NEWLINE / DEDUP_NUMBERED 同步合并写入剪贴板 (Tier 0 等待 ⌘V)
+    if let Some(text) = r.mergedText.as_deref() {
+        crate::l3_ipc::write_plain_to_pasteboard(text, engine.clipboard_owner.clone());
+    }
+    Ok(r)
+}
+
+// —— 贪吃蛇面板命令 (UI Spec §4.2 / IPC Spec §3.2) ——
+
+#[tauri::command]
+pub fn cmd_list_stack(state: tauri::State<'_, IpcState>) -> ListStackReturn {
+    let stack = state.stack.lock().unwrap();
+    list_stack(&stack)
+}
+
+#[tauri::command]
+pub fn cmd_remove_stack_item(
+    state: tauri::State<'_, IpcState>,
+    args: StackItemArgs,
+) -> IpcResult<ListStackReturn> {
+    let mut stack = state.stack.lock().unwrap();
+    remove_stack_item(&mut stack, args.index)
+}
+
+#[tauri::command]
+pub fn cmd_reorder_stack_items(
+    state: tauri::State<'_, IpcState>,
+    args: StackReorderArgs,
+) -> IpcResult<ListStackReturn> {
+    let mut stack = state.stack.lock().unwrap();
+    reorder_stack_items(&mut stack, args.from, args.to)
 }
 
 #[tauri::command]
@@ -372,6 +507,45 @@ mod tests {
         assert!(matches!(summary_to_prompt_type(None), PromptType::MeetingNotes));
         assert!(matches!(summary_to_prompt_type(Some(SummaryPromptType::ComparisonTable)), PromptType::ComparisonTable));
         assert!(matches!(summary_to_prompt_type(Some(SummaryPromptType::TodoList)), PromptType::TodoList));
+    }
+
+    #[test]
+    fn record_copy_entry_fills_history_and_stack_when_active() {
+        let history = Mutex::new(HistoryDb::in_memory().unwrap());
+        let stack = Mutex::new(StackQueue::new());
+        assert!(!record_copy_entry(&history, &stack, "   ", "X")); // 空白不入库
+        stack.lock().unwrap().set_active(true);
+        assert!(record_copy_entry(&history, &stack, "片段内容", "Notion"));
+        // 历史已入库
+        assert_eq!(history.lock().unwrap().recent(10).unwrap().len(), 1);
+        // 贪吃蛇已入队 (收集槽开启)
+        let st = list_stack(&stack.lock().unwrap());
+        assert_eq!(st.items.len(), 1);
+        assert_eq!(st.items[0].plain_text, "片段内容");
+    }
+
+    #[test]
+    fn record_copy_entry_skips_stack_when_inactive() {
+        let history = Mutex::new(HistoryDb::in_memory().unwrap());
+        let stack = Mutex::new(StackQueue::new()); // 未开启
+        assert!(record_copy_entry(&history, &stack, "内容", "Notes"));
+        assert_eq!(history.lock().unwrap().recent(10).unwrap().len(), 1);
+        assert_eq!(stack.lock().unwrap().len(), 0); // 未开启不入队
+    }
+
+    #[test]
+    fn stack_panel_remove_and_reorder_ops() {
+        let mut stack = StackQueue::new();
+        stack.set_active(true);
+        for t in ["a", "b", "c"] {
+            stack.push(StackEntry { id: t.into(), plain_text: t.into(), source_app_name: "X".into() });
+        }
+        let r = reorder_stack_items(&mut stack, 2, 0).unwrap();
+        assert_eq!(r.items[0].plain_text, "c");
+        let r = remove_stack_item(&mut stack, 1).unwrap();
+        assert_eq!(r.items.len(), 2);
+        assert_eq!(r.items[1].plain_text, "b");
+        assert_eq!(remove_stack_item(&mut stack, 9).unwrap_err().code, "STACK_ITEM_NOT_FOUND");
     }
 
     #[test]

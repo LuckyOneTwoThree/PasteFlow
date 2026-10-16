@@ -1,0 +1,578 @@
+<!doctype html>
+<!--
+  PasteFlow 磁吸式历史与贪吃蛇侧边抽屉 (UI Spec v1.0 §4 / IPC Spec v1.0 `/#/drawer`)
+  零依赖原生 HTML/CSS/JS 页面，由 drawer WebviewWindow 加载 (360px 无边框透明)。
+  结构: 搜索栏 + 类型胶囊过滤 → 🐍 贪吃蛇收集槽面板 (开启时展开) → 历史条目卡片列表。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PasteFlow 抽屉</title>
+<style>
+  :root {
+    --pf-surface-drawer: rgba(22, 22, 26, 0.92);
+    --pf-border-subtle: rgba(255, 255, 255, 0.12);
+    --pf-text-primary: #f9fafb;
+    --pf-text-secondary: #9ca3af;
+    --pf-accent-brand: #6366f1;
+    --pf-accent-success: #10b981;
+    --pf-accent-snake: #f59e0b;
+    --pf-accent-dlp: #ef4444;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+  }
+  #drawer {
+    position: absolute; inset: 12px;
+    background: var(--pf-surface-drawer);
+    color: var(--pf-text-primary);
+    border: 1px solid var(--pf-border-subtle);
+    border-radius: 16px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  /* 顶部搜索栏 */
+  .search-bar { padding: 12px 14px 8px; }
+  #search {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--pf-border-subtle);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 13px;
+    color: var(--pf-text-primary);
+    outline: none;
+  }
+  #search:focus { border-color: var(--pf-accent-brand); }
+  .pills {
+    display: flex; gap: 6px;
+    padding: 8px 14px 10px;
+    overflow-x: auto;
+  }
+  .pill {
+    flex: none;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--pf-border-subtle);
+    color: var(--pf-text-secondary);
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .pill.active {
+    background: var(--pf-accent-brand);
+    color: #fff;
+    border-color: transparent;
+  }
+
+  /* 🐍 贪吃蛇收集槽面板 (开启时展开) */
+  #stack-panel {
+    display: none;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 14px 10px;
+    padding: 10px;
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    border-radius: 12px;
+    background: rgba(245, 158, 11, 0.08);
+  }
+  #stack-panel.open { display: flex; }
+  .stack-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px;
+  }
+  .stack-title { color: var(--pf-accent-snake); font-weight: 600; }
+  .stack-toggle {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--pf-accent-snake);
+    color: var(--pf-accent-snake);
+    background: transparent;
+    cursor: pointer;
+  }
+  .stack-list {
+    display: flex; flex-direction: column; gap: 4px;
+    max-height: 132px; overflow-y: auto;
+  }
+  .stack-item {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px;
+    padding: 5px 8px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    cursor: grab;
+  }
+  .stack-item.dragging { opacity: 0.45; }
+  .stack-item .idx { color: var(--pf-accent-snake); font-weight: 700; width: 14px; }
+  .stack-item .txt {
+    flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .stack-item .src { color: var(--pf-text-secondary); font-size: 10px; flex: none; }
+  .stack-item .rm {
+    flex: none;
+    border: none; background: transparent;
+    color: var(--pf-text-secondary);
+    cursor: pointer; font-size: 12px;
+  }
+  .stack-item .rm:hover { color: var(--pf-accent-dlp); }
+  .stack-actions { display: flex; gap: 6px; align-items: center; }
+  .btn {
+    flex: 1;
+    font-size: 11px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--pf-border-subtle);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--pf-text-primary);
+    cursor: pointer;
+    transition: background 120ms ease;
+    white-space: nowrap;
+  }
+  .btn:hover { background: rgba(255, 255, 255, 0.16); }
+  .btn.primary { background: var(--pf-accent-snake); border-color: transparent; color: #1c1c1e; font-weight: 600; }
+  .btn.ai { background: var(--pf-accent-brand); border-color: transparent; }
+  #ai-kind {
+    flex: 1.2;
+    font-size: 11px;
+    padding: 6px 6px;
+    border-radius: 8px;
+    border: 1px solid var(--pf-border-subtle);
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--pf-text-primary);
+    outline: none;
+  }
+
+  /* L3 流式预览 (UI Spec §3.3 同款语义, 在抽屉内呈现) */
+  #l3-panel {
+    display: none;
+    flex-direction: column; gap: 6px;
+    margin: 0 14px 10px;
+    padding: 10px;
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    border-radius: 12px;
+    background: rgba(99, 102, 241, 0.1);
+  }
+  #l3-panel.open { display: flex; }
+  .l3-status {
+    font-size: 11px;
+    color: var(--pf-text-secondary);
+    display: flex; justify-content: space-between;
+  }
+  .l3-status.streaming::before {
+    content: '⚡ ';
+    animation: breathe 1.2s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .l3-body {
+    max-height: 140px; overflow-y: auto;
+    font-size: 12px; line-height: 1.55;
+    white-space: pre-wrap; word-break: break-word;
+    background: rgba(255, 255, 255, 0.06);
+    border-radius: 8px; padding: 8px 10px;
+    -webkit-user-select: text; user-select: text;
+  }
+  .l3-hint { font-size: 10px; color: var(--pf-text-secondary); }
+
+  /* 历史条目卡片 */
+  .history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2px 14px 14px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .card {
+    min-height: 84px;
+    border: 1px solid var(--pf-border-subtle);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .card-top {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--pf-text-secondary);
+  }
+  .card-top .app { color: var(--pf-text-primary); font-weight: 600; }
+  .card-top .spacer { flex: 1; }
+  .badge {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.18);
+    color: #a5b4fc;
+    flex: none;
+  }
+  .pin {
+    border: none; background: transparent;
+    cursor: pointer; font-size: 12px;
+    color: var(--pf-text-secondary);
+  }
+  .pin.on { color: var(--pf-accent-snake); }
+  .card-excerpt {
+    font-size: 12px; line-height: 1.5;
+    color: var(--pf-text-primary);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card-preview {
+    display: none;
+    font-size: 11px; line-height: 1.5;
+    max-height: 108px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-word;
+    background: rgba(0, 0, 0, 0.25);
+    border-radius: 8px; padding: 8px 10px;
+    -webkit-user-select: text; user-select: text;
+  }
+  .card.show-preview .card-preview { display: block; }
+  .card.show-preview .card-excerpt { display: none; }
+  .card-foot {
+    display: flex; justify-content: flex-end; gap: 6px;
+  }
+  .mini-btn {
+    font-size: 10px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--pf-border-subtle);
+    background: transparent;
+    color: var(--pf-text-secondary);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+  .card:hover .mini-btn { opacity: 1; }
+  .mini-btn.on { color: var(--pf-accent-brand); border-color: var(--pf-accent-brand); }
+  .empty {
+    text-align: center;
+    font-size: 12px;
+    color: var(--pf-text-secondary);
+    padding: 32px 0;
+  }
+  .toast-line {
+    position: absolute;
+    left: 14px; right: 14px; bottom: 12px;
+    font-size: 11px;
+    text-align: center;
+    padding: 7px 10px;
+    border-radius: 10px;
+    background: rgba(16, 185, 129, 0.22);
+    color: var(--pf-accent-success);
+    display: none;
+  }
+  .toast-line.show { display: block; }
+</style>
+</head>
+<body>
+  <div id="drawer" role="dialog" aria-label="PasteFlow 历史抽屉">
+    <div class="search-bar">
+      <input id="search" type="search" placeholder="搜索剪贴板历史 (FTS5 毫秒级)…" />
+    </div>
+    <div class="pills" id="pills">
+      <button class="pill active" data-filter="ALL">全部</button>
+      <button class="pill" data-filter="MARKDOWN">✨ Markdown</button>
+      <button class="pill" data-filter="LINK">🔗 链接</button>
+      <button class="pill" data-filter="CODE">💻 代码</button>
+      <button class="pill" data-filter="IMAGE">🖼️ 图片</button>
+    </div>
+
+    <!-- 🐍 贪吃蛇连续收集槽面板 -->
+    <div id="stack-panel">
+      <div class="stack-head">
+        <span class="stack-title">🐍 贪吃蛇收集槽 <span id="stack-count">0</span></span>
+        <button class="stack-toggle" id="stack-toggle">关闭 (⌥⇧S)</button>
+      </div>
+      <div class="stack-list" id="stack-list"></div>
+      <div class="stack-actions">
+        <button class="btn primary" id="consume-join">换行合并粘贴 ⌘↩</button>
+        <button class="btn" id="consume-dedup">去重编号列表</button>
+      </div>
+      <div class="stack-actions">
+        <select id="ai-kind">
+          <option value="MEETING_NOTES">生成会议纪要</option>
+          <option value="COMPARISON_TABLE">生成对比表格</option>
+          <option value="TODO_LIST">提取待办清单</option>
+        </select>
+        <button class="btn ai" id="consume-ai">✨ AI 智能汇总</button>
+      </div>
+    </div>
+
+    <!-- L3 流式预览 -->
+    <div id="l3-panel">
+      <div class="l3-status streaming" id="l3-status">
+        <span id="l3-title">AI 汇总生成中…</span>
+        <span id="l3-latency"></span>
+      </div>
+      <div class="l3-body" id="l3-body"></div>
+      <div class="l3-hint">Esc 取消 · 生成完毕后 ↩ 确认粘贴 (一次性原子上屏)</div>
+    </div>
+
+    <div class="history-list" id="history-list"></div>
+    <div class="toast-line" id="toast-line"></div>
+  </div>
+
+<script>
+// Tauri IPC: withGlobalTauri=true -> window.__TAURI__ (无打包器静态页面)
+const tauri = window.__TAURI__ ?? {};
+const { listen, invoke } = tauri.core ?? {};
+const NOOP = () => Promise.resolve(null);
+
+// —— 状态 ——
+let query = '';
+let tagFilter = '';
+let stackActive = false;
+let stackItems = [];
+let l3StreamId = null;
+let l3Done = false;
+let l3Text = '';
+
+// —— 历史列表 (IPC Spec `cmd_search_history`) ——
+async function refreshHistory() {
+  const r = await (invoke ?? NOOP)('cmd_search_history', {
+    args: { query, tagFilter: tagFilter || null, limit: 50, offset: 0 },
+  }).catch(() => null);
+  const items = r?.items ?? [];
+  const list = document.getElementById('history-list');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">暂无匹配的剪贴板历史</div>';
+    return;
+  }
+  list.innerHTML = items.map(cardHtml).join('');
+  bindCards();
+}
+
+function cardHtml(it) {
+  const excerpt = it.plainTextExcerpt ?? '(非文本内容)';
+  const tags = (it.tags ?? []).map(t => `<span class="badge">${escapeHtml(t)}</span>`).join('');
+  return `<div class="card" data-id="${escapeHtml(it.id)}">
+    <div class="card-top">
+      <span class="app">${escapeHtml(it.sourceAppName || '未知应用')}</span>
+      <span>${relativeTime(it.createdAt)}</span>
+      <span class="spacer"></span>
+      ${tags}
+      <button class="pin ${it.isPinned ? 'on' : ''}" title="置顶">📌</button>
+    </div>
+    <div class="card-excerpt">${escapeHtml(excerpt)}</div>
+    <div class="card-preview">${escapeHtml(excerpt)}</div>
+    <div class="card-foot">
+      <button class="mini-btn preview-toggle">预览转换效果</button>
+    </div>
+  </div>`;
+}
+
+function bindCards() {
+  document.querySelectorAll('.card').forEach(card => {
+    const id = card.dataset.id;
+    card.querySelector('.preview-toggle').addEventListener('click', (e) => {
+      e.stopPropagation();
+      card.classList.toggle('show-preview');
+      e.target.classList.toggle('on');
+      e.target.textContent = card.classList.contains('show-preview') ? '查看原始文本' : '预览转换效果';
+    });
+    card.querySelector('.pin').addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const btn = e.currentTarget;
+      const pinned = !btn.classList.contains('on');
+      await (invoke ?? NOOP)('cmd_toggle_pin_item', { args: { itemId: id, pinned } }).catch(() => null);
+      btn.classList.toggle('on', pinned);
+    });
+  });
+}
+
+function relativeTime(ms) {
+  if (!ms) return '';
+  const diff = Date.now() - ms;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return '刚刚';
+  if (min < 60) return `${min} 分钟前`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+// 搜索输入 (FTS5 毫秒级过滤, 前端 150ms 防抖)
+let searchTimer = null;
+document.getElementById('search').addEventListener('input', (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { query = e.target.value; refreshHistory(); }, 150);
+});
+
+// 类型胶囊过滤
+document.getElementById('pills').addEventListener('click', (e) => {
+  const pill = e.target.closest('.pill');
+  if (!pill) return;
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  pill.classList.add('active');
+  tagFilter = pill.dataset.filter === 'ALL' ? '' : pill.dataset.filter.toLowerCase();
+  refreshHistory();
+});
+
+// —— 🐍 贪吃蛇面板 (UI Spec §4.2) ——
+async function refreshStack() {
+  const r = await (invoke ?? NOOP)('cmd_list_stack').catch(() => null);
+  if (!r) return;
+  stackActive = r.active;
+  stackItems = r.items ?? [];
+  const panel = document.getElementById('stack-panel');
+  panel.classList.toggle('open', stackActive);
+  document.getElementById('stack-count').textContent = stackItems.length;
+  document.getElementById('stack-toggle').textContent = stackActive ? '关闭 (⌥⇧S)' : '开启 (⌥⇧S)';
+  const list = document.getElementById('stack-list');
+  list.innerHTML = stackItems.map((it, i) => `
+    <div class="stack-item" draggable="true" data-index="${i}">
+      <span class="idx">${i + 1}</span>
+      <span class="txt">${escapeHtml(it.plainText)}</span>
+      <span class="src">${escapeHtml(it.sourceAppName)}</span>
+      <button class="rm" title="移除">✕</button>
+    </div>`).join('');
+  bindStackItems();
+}
+
+function bindStackItems() {
+  let dragIndex = null;
+  document.querySelectorAll('.stack-item').forEach(el => {
+    const idx = Number(el.dataset.index);
+    el.querySelector('.rm').addEventListener('click', async () => {
+      await (invoke ?? NOOP)('cmd_remove_stack_item', { args: { index: idx } }).catch(() => null);
+      refreshStack();
+    });
+    el.addEventListener('dragstart', () => {
+      dragIndex = idx;
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend', () => el.classList.remove('dragging'));
+    el.addEventListener('dragover', (e) => e.preventDefault());
+    el.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      if (dragIndex === null || dragIndex === idx) return;
+      await (invoke ?? NOOP)('cmd_reorder_stack_items', { args: { from: dragIndex, to: idx } }).catch(() => null);
+      dragIndex = null;
+      refreshStack();
+    });
+  });
+}
+
+document.getElementById('stack-toggle').addEventListener('click', async () => {
+  await (invoke ?? NOOP)('cmd_set_stack_mode', { args: { active: !stackActive } }).catch(() => null);
+  refreshStack();
+});
+
+async function consume(mode, summaryPromptType) {
+  const r = await (invoke ?? NOOP)('cmd_consume_stack_queue', {
+    args: { mode, summaryPromptType: summaryPromptType ?? null },
+  }).catch(() => null);
+  if (!r) { toast('消费失败 (队列为空或配置缺失)'); return; }
+  if (r.streamId) {
+    // L3_AI_SUMMARY: 流式预览 (队列保持, 生成完毕由用户决定上屏)
+    startL3Panel(r.streamId);
+    return;
+  }
+  toast(`已合并 ${r.consumedCount} 条 → 剪贴板就绪，按 ⌘V 粘贴`);
+  refreshStack();
+}
+
+document.getElementById('consume-join').addEventListener('click', () => consume('JOIN_NEWLINE'));
+document.getElementById('consume-dedup').addEventListener('click', () => consume('DEDUP_NUMBERED'));
+document.getElementById('consume-ai').addEventListener('click', () =>
+  consume('L3_AI_SUMMARY', document.getElementById('ai-kind').value));
+
+// —— L3 流式预览 (IPC Spec §4 `pasteflow://l3-stream-chunk`) ——
+function startL3Panel(streamId) {
+  l3StreamId = streamId;
+  l3Done = false;
+  l3Text = '';
+  document.getElementById('l3-panel').classList.add('open');
+  document.getElementById('l3-status').className = 'l3-status streaming';
+  document.getElementById('l3-title').textContent = 'AI 汇总生成中…';
+  document.getElementById('l3-body').textContent = '';
+}
+
+(listen ?? NOOP)('pasteflow://l3-stream-chunk', (ev) => {
+  const p = ev.payload ?? {};
+  if (p.streamId !== l3StreamId) return;
+  l3Text = p.accumulatedText ?? l3Text;
+  document.getElementById('l3-body').textContent = l3Text;
+  if (p.firstTokenLatencyMs != null) {
+    document.getElementById('l3-latency').textContent = `首块 ${p.firstTokenLatencyMs}ms`;
+  }
+  if (!p.done) return;
+  if (p.errorCode) {
+    document.getElementById('l3-status').className = 'l3-status';
+    document.getElementById('l3-title').textContent = `生成失败: ${p.errorCode}`;
+    return;
+  }
+  l3Done = true;
+  document.getElementById('l3-status').className = 'l3-status';
+  document.getElementById('l3-title').textContent = '✅ 生成完毕 · 按 ↩ 确认粘贴';
+}).catch(() => {});
+
+async function cancelL3() {
+  if (!l3StreamId) return;
+  await (invoke ?? NOOP)('cmd_cancel_l3_stream', { streamId: l3StreamId }).catch(() => null);
+  document.getElementById('l3-panel').classList.remove('open');
+  l3StreamId = null;
+}
+
+async function commitL3() {
+  if (!l3StreamId || !l3Done) return;
+  const r = await (invoke ?? NOOP)('cmd_l3_commit_paste', { streamId: l3StreamId }).catch(() => null);
+  document.getElementById('l3-panel').classList.remove('open');
+  l3StreamId = null;
+  if (r) toast('已准备就绪，请按 ⌘V 粘贴 (一次性原子上屏)');
+}
+
+window.addEventListener('keydown', (e) => {
+  if (l3StreamId) {
+    // 流式态按键全吞: Esc 取消 / Enter 确认粘贴
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === 'Escape') cancelL3();
+    else if (e.key === 'Enter' && l3Done) commitL3();
+    return;
+  }
+  if (e.key === 'Escape') {
+    (invoke ?? NOOP)('cmd_drawer_visible', { visible: false }).catch(() => {});
+  }
+}, true);
+
+// ⌘↩ 换行合并粘贴 (主按钮快捷键)
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.metaKey && !l3StreamId) consume('JOIN_NEWLINE');
+});
+
+// —— 事件订阅 (IPC Spec §4) ——
+(listen ?? NOOP)('pasteflow://stack-updated', () => refreshStack()).catch(() => {});
+(listen ?? NOOP)('pasteflow://drawer-refresh', () => { refreshHistory(); refreshStack(); }).catch(() => {});
+
+refreshHistory();
+refreshStack();
+
+// —— 小工具 ——
+let toastTimer = null;
+function toast(msg) {
+  const el = document.getElementById('toast-line');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2400);
+}
+</script>
+</body>
+</html>

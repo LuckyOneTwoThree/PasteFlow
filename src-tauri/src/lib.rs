@@ -25,6 +25,7 @@ pub mod stack;
 pub mod recipe_import;
 pub mod ipc;
 pub mod hud_window;
+pub mod drawer_window;
 pub mod dashboard_window;
 pub mod l3;
 pub mod l3_ipc;
@@ -44,6 +45,7 @@ use std::sync::Arc;
 ///
 /// 铁律: 不创建任何 tauri Window (55MB 内存红线, 零 Webview)
 pub fn run(context: tauri::Context<tauri::Wry>) {
+    use tauri::Emitter;
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -54,8 +56,14 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
 
     let state = Arc::new(EngineState::new());
     // P2-8 IPC 状态 (storage + stack + drawer + recipes)
-    let ipc_state = ipc::IpcState::new(
+    // P3-2: 历史库与贪吃蛇队列改为共享句柄 (引擎复制事件写入, 抽屉读取同一份)
+    let history_db = std::sync::Arc::new(std::sync::Mutex::new(
         storage::HistoryDb::in_memory().expect("in-memory history db"),
+    ));
+    let stack_queue = std::sync::Arc::new(std::sync::Mutex::new(stack::StackQueue::new()));
+    let ipc_state = ipc::IpcState::new(
+        history_db.clone(),
+        stack_queue.clone(),
         recipe::RecipeStore::with_builtin().expect("builtin recipes"),
     );
 
@@ -77,8 +85,12 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             ipc::cmd_toggle_pin_item,
             ipc::cmd_set_stack_mode,
             ipc::cmd_consume_stack_queue,
+            ipc::cmd_list_stack,
+            ipc::cmd_remove_stack_item,
+            ipc::cmd_reorder_stack_items,
             ipc::cmd_import_pipe_recipe,
             ipc::cmd_list_pipe_recipes,
+            drawer_window::cmd_drawer_visible,
             cmd_hud_visible,
             cmd_hud_trigger,
             cmd_get_diagnostic_snapshot,
@@ -110,8 +122,15 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                 .tooltip("PasteFlow (灵贴)")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
-                    // P2-7: 打开主面板 (IPC Spec §1: 按需创建 + 关闭 30s 销毁)
-                    if matches!(event.id().as_ref(), "history" | "diagnostics") {
+                    // P3-2: 「剪贴板历史」= 磁吸抽屉 (⌥⇧V 同义)；「诊断看板」= 主面板
+                    if event.id().as_ref() == "history" {
+                        let handle = app.clone();
+                        let _ = handle.clone().run_on_main_thread(move || {
+                            drawer_window::toggle(&handle);
+                        });
+                        return;
+                    }
+                    if event.id().as_ref() == "diagnostics" {
                         let tracker = dashboard_tracker.clone();
                         let handle = app.clone();
                         let _ = handle.clone().run_on_main_thread(move || {
@@ -148,6 +167,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             // 50ms changeCount 轮询 (后台线程); 决策后挂载在主线程执行
             let state_tick = state_for_setup.clone();
             let handle_tick = handle.clone();
+            let history_tick = history_db.clone();
+            let stack_tick = stack_queue.clone();
             std::thread::spawn(move || {
                 let mut last_cc: i64 = current_change_count();
                 loop {
@@ -173,6 +194,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                     let volumes = clipboard_volumes();
                     let state = state_tick.clone();
                     let handle = handle_tick.clone();
+                    let history = history_tick.clone();
+                    let stack = stack_tick.clone();
                     // 决策在后台 (纯逻辑); 挂载 AppKit 在主线程
                     let outcome = state.evaluate_takeover(&types, volumes, 1);
                     if !outcome.should_take_over {
@@ -183,9 +206,16 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                     {
                         continue;
                     }
+                    let handle_emit = handle.clone();
                     let _ = handle.run_on_main_thread(move || {
                         let front = paste_provider::frontmost_bundle();
                         let source_text = clipboard_plain_text();
+                        // P3-2: 复制事件 → 历史入库 + 贪吃蛇入队 (抽屉数据源)
+                        let recorded = ipc::record_copy_entry(&history, &stack, &source_text, &front);
+                        if recorded {
+                            let ev = serde_json::json!({ "active": stack.lock().unwrap().is_active() });
+                            let _ = handle_emit.emit_to("drawer", "pasteflow://stack-updated", ev);
+                        }
                         let deps = paste_provider::ProviderDeps {
                             window_observer: state.window_observer.clone(),
                             pipe_executor: state.pipe_executor.clone(),
