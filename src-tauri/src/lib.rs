@@ -22,6 +22,7 @@ pub mod hud;
 pub mod hud_state;
 pub mod drawer;
 pub mod stack;
+pub mod recipe_import;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 
