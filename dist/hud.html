@@ -13,14 +13,15 @@
 <title>PasteFlow Micro-HUD</title>
 <style>
   :root {
-    --hud-bg: rgba(18, 17, 27, 0.88);
-    --hud-fg: #f8f8fc;
-    --hud-muted: #8c8a9e;
-    --hud-border: rgba(255, 255, 255, 0.12);
-    --hud-highlight: rgba(255, 255, 255, 0.18);
-    --hud-accent: #7168f5;
-    --hud-ready: #35d6c5;
-    --hud-amber: #f59e0b;
+    --hud-bg: rgba(255, 255, 255, 0.94);
+    --hud-fg: #0f172a;
+    --hud-muted: #64748b;
+    --hud-border: rgba(0, 0, 0, 0.08);
+    --hud-highlight: rgba(99, 102, 241, 0.08);
+    --hud-accent: #6366f1;
+    --hud-accent-dark: #4f46e5;
+    --hud-ready: #059669;
+    --hud-amber: #d97706;
     --hud-red: #ef4444;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -40,11 +41,11 @@
     border-radius: 18px;
     border: 1px solid var(--hud-border);
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.16),
-      0 20px 48px rgba(0, 0, 0, 0.65),
-      0 0 0 1px rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(32px) saturate(190%);
-    -webkit-backdrop-filter: blur(32px) saturate(190%);
+      inset 0 1px 0 #ffffff,
+      0 16px 40px -4px rgba(15, 23, 42, 0.12),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+    backdrop-filter: blur(36px) saturate(180%);
+    -webkit-backdrop-filter: blur(36px) saturate(180%);
     padding: 10px 10px 8px;
     display: none;
     flex-direction: column;
@@ -59,11 +60,11 @@
     transform: scale(1) translateY(0);
   }
   #panel.ready {
-    border-color: rgba(53, 214, 197, 0.6);
+    border-color: rgba(16, 185, 129, 0.45);
     box-shadow:
-      inset 0 1px 0 rgba(53, 214, 197, 0.3),
-      0 0 24px rgba(53, 214, 197, 0.25),
-      0 20px 48px rgba(0, 0, 0, 0.65);
+      inset 0 1px 0 #ffffff,
+      0 0 24px rgba(16, 185, 129, 0.18),
+      0 16px 40px -4px rgba(15, 23, 42, 0.12);
   }
 
   /* 顶部上下文栏 */
@@ -72,25 +73,25 @@
     color: var(--hud-muted);
     display: flex; justify-content: space-between; align-items: center;
     padding: 3px 6px 6px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
     margin-bottom: 2px;
   }
   .header .app-badge {
     display: inline-flex; align-items: center; gap: 5px;
-    color: #e2e1ec; font-weight: 500;
+    color: #1e293b; font-weight: 600;
   }
   .header .app-badge .dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--hud-accent);
-    box-shadow: 0 0 6px var(--hud-accent);
+    box-shadow: 0 0 6px rgba(99, 102, 241, 0.4);
   }
   .header .esc-hint {
     font-size: 9px;
     font-family: ui-monospace, SFMono-Regular, monospace;
-    padding: 1px 5px; border-radius: 4px;
-    background: rgba(255, 255, 255, 0.08);
+    padding: 2px 6px; border-radius: 4px;
+    background: #f1f5f9;
     color: var(--hud-muted);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(0, 0, 0, 0.06);
   }
 
   /* 槽位列表 */
@@ -107,38 +108,40 @@
     transition: all 100ms cubic-bezier(0.16, 1, 0.3, 1);
   }
   .slot:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(0, 0, 0, 0.04);
   }
   .slot.highlighted {
-    background: linear-gradient(135deg, rgba(113, 104, 245, 0.88), rgba(80, 71, 213, 0.94));
-    border-color: rgba(255, 255, 255, 0.22);
-    box-shadow: 0 4px 14px rgba(113, 104, 245, 0.35);
+    background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+    border-color: rgba(255, 255, 255, 0.3);
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.32);
   }
 
   /* 3D 拟真按键标签 (kbd) */
   .slot .key {
     width: 22px; height: 22px;
     display: inline-flex; align-items: center; justify-content: center;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.06) 100%);
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-bottom: 1px solid rgba(0, 0, 0, 0.35);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-bottom: 2px solid rgba(0, 0, 0, 0.18);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), inset 0 1px 0 #ffffff;
     border-radius: 6px;
     font-size: 11px; font-weight: 700;
     font-family: ui-monospace, SFMono-Regular, monospace;
-    color: var(--hud-fg);
+    color: #1e293b;
     flex: none;
   }
   .slot.highlighted .key {
-    background: rgba(255, 255, 255, 0.25);
-    border-color: rgba(255, 255, 255, 0.4);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.22);
+    border-color: rgba(255, 255, 255, 0.35);
+    border-bottom: 2px solid rgba(0, 0, 0, 0.15);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+    color: #ffffff;
   }
 
   .slot .label {
     flex: 1;
     font-weight: 500;
-    color: #dedcf0;
+    color: #1e293b;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .slot.highlighted .label {
@@ -194,9 +197,9 @@
     overflow-y: auto;
     font-size: 12px;
     line-height: 1.55;
-    color: var(--hud-fg);
-    background: rgba(10, 9, 16, 0.6);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: #1e293b;
+    background: #f8fafc;
+    border: 1px solid rgba(0, 0, 0, 0.08);
     border-radius: 10px;
     padding: 10px 12px;
     white-space: pre-wrap;
@@ -212,21 +215,22 @@
   #panel.l3-done .l3-actions { display: flex; }
   .l3-actions span {
     padding: 3px 8px; border-radius: 6px;
-    background: rgba(255, 255, 255, 0.08);
+    background: #f1f5f9;
     color: var(--hud-muted);
     font-size: 10px; font-family: ui-monospace, monospace;
+    border: 1px solid rgba(0, 0, 0, 0.05);
   }
   .l3-actions .primary {
-    background: rgba(53, 214, 197, 0.18);
-    border: 1px solid rgba(53, 214, 197, 0.35);
-    color: var(--hud-ready); font-weight: 700;
+    background: #ecfdf5;
+    border: 1px solid #a7f3d0;
+    color: #047857; font-weight: 700;
   }
 
   /* 就绪反馈态 */
   #ready-text {
     display: none;
     font-size: 13px; font-weight: 600;
-    color: var(--hud-ready);
+    color: #047857;
     text-align: center; padding: 14px 10px;
     letter-spacing: -0.01em;
   }
