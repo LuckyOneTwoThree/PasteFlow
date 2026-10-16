@@ -20,6 +20,8 @@ pub mod paste_provider;
 pub mod storage;
 pub mod hud;
 pub mod hud_state;
+pub mod drawer;
+pub mod stack;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 

@@ -5,4 +5,4 @@
 
 pub mod db;
 
-pub use db::{ClipboardItem, GateSkipReason, HistoryDb, ServedLogEntry};
+pub use db::{make_item, ClipboardItem, GateSkipReason, HistoryDb, ServedLogEntry};
