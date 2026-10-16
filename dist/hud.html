@@ -4,6 +4,7 @@
   零依赖原生 HTML/CSS/JS 页面，由 micro-hud WebviewWindow 常驻隐藏加载。
   按键: 1–4 触发动作槽 / 0·Backspace 还原原文 / ↑↓·Tab 循环高亮 /
         Enter 执行高亮行 / Esc 隐藏 (自动挡不变)。按键绝不泄漏进宿主应用。
+  视觉标准：Raycast / Spotlight 级「灵隙深色毛玻璃 (Obsidian Glass)」微胶囊设计。
 -->
 <html lang="zh-CN">
 <head>
@@ -12,34 +13,156 @@
 <title>PasteFlow Micro-HUD</title>
 <style>
   :root {
-    --hud-bg: rgba(28, 28, 30, 0.94);
-    --hud-fg: #f5f5f7;
-    --hud-muted: #98989f;
-    --hud-accent: #0a84ff;
-    --hud-ready: #30d158;
+    --hud-bg: rgba(18, 17, 27, 0.88);
+    --hud-fg: #f8f8fc;
+    --hud-muted: #8c8a9e;
+    --hud-border: rgba(255, 255, 255, 0.12);
+    --hud-highlight: rgba(255, 255, 255, 0.18);
+    --hud-accent: #7168f5;
+    --hud-ready: #35d6c5;
+    --hud-amber: #f59e0b;
+    --hud-red: #ef4444;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
     width: 100%; height: 100%;
     background: transparent;
-    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
     -webkit-user-select: none; user-select: none;
+    -webkit-font-smoothing: antialiased;
     overflow: hidden;
   }
+
   #panel {
     position: absolute; inset: 8px;
     background: var(--hud-bg);
     color: var(--hud-fg);
-    border-radius: 16px;
-    border: 1px solid rgba(255,255,255,0.12);
-    box-shadow: 0 16px 48px rgba(0,0,0,0.35);
-    padding: 12px 14px;
+    border-radius: 18px;
+    border: 1px solid var(--hud-border);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.16),
+      0 20px 48px rgba(0, 0, 0, 0.65),
+      0 0 0 1px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(32px) saturate(190%);
+    -webkit-backdrop-filter: blur(32px) saturate(190%);
+    padding: 10px 10px 8px;
     display: none;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+    transition: opacity 120ms ease-out, transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
   }
-  #panel.visible { display: flex; }
-  #panel.ready { outline: 2px solid var(--hud-ready); }
+  #panel.visible {
+    display: flex;
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  #panel.ready {
+    border-color: rgba(53, 214, 197, 0.6);
+    box-shadow:
+      inset 0 1px 0 rgba(53, 214, 197, 0.3),
+      0 0 24px rgba(53, 214, 197, 0.25),
+      0 20px 48px rgba(0, 0, 0, 0.65);
+  }
+
+  /* 顶部上下文栏 */
+  .header {
+    font-size: 11px;
+    color: var(--hud-muted);
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 3px 6px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    margin-bottom: 2px;
+  }
+  .header .app-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    color: #e2e1ec; font-weight: 500;
+  }
+  .header .app-badge .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--hud-accent);
+    box-shadow: 0 0 6px var(--hud-accent);
+  }
+  .header .esc-hint {
+    font-size: 9px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    padding: 1px 5px; border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--hud-muted);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* 槽位列表 */
+  #slots {
+    display: flex; flex-direction: column; gap: 3px;
+  }
+  .slot {
+    display: flex; align-items: center; gap: 9px;
+    padding: 6px 8px;
+    border-radius: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .slot:hover {
+    background: rgba(255, 255, 255, 0.06);
+  }
+  .slot.highlighted {
+    background: linear-gradient(135deg, rgba(113, 104, 245, 0.88), rgba(80, 71, 213, 0.94));
+    border-color: rgba(255, 255, 255, 0.22);
+    box-shadow: 0 4px 14px rgba(113, 104, 245, 0.35);
+  }
+
+  /* 3D 拟真按键标签 (kbd) */
+  .slot .key {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.14) 0%, rgba(255, 255, 255, 0.06) 100%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.35);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    font-size: 11px; font-weight: 700;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--hud-fg);
+    flex: none;
+  }
+  .slot.highlighted .key {
+    background: rgba(255, 255, 255, 0.25);
+    border-color: rgba(255, 255, 255, 0.4);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  }
+
+  .slot .label {
+    flex: 1;
+    font-weight: 500;
+    color: #dedcf0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .slot.highlighted .label {
+    color: #ffffff; font-weight: 600;
+  }
+
+  .slot .shortcut {
+    font-size: 11px; color: var(--hud-muted);
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    flex: none;
+  }
+  .slot.highlighted .shortcut {
+    color: rgba(255, 255, 255, 0.9);
+  }
+  .slot .enter-icon {
+    display: none;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.85);
+    margin-left: 2px;
+  }
+  .slot.highlighted .enter-icon {
+    display: inline-block;
+  }
+
   /* P3-1: L3 流式预览展开态 (UI Spec §3.3) */
   #panel.streaming, #panel.l3-done {
     width: calc(100% - 16px);
@@ -47,90 +170,81 @@
   .l3-preview {
     display: none;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    padding: 2px 2px 4px;
   }
   #panel.streaming .l3-preview, #panel.l3-done .l3-preview { display: flex; }
-  #panel.streaming .header, #panel.streaming .slot,
-  #panel.l3-done .header, #panel.l3-done .slot { display: none; }
+  #panel.streaming .header, #panel.streaming #slots,
+  #panel.l3-done .header, #panel.l3-done #slots { display: none; }
+
   .l3-status {
-    font-size: 11px; letter-spacing: 0.4px;
+    font-size: 11px; font-weight: 600;
     color: var(--hud-muted);
     display: flex; justify-content: space-between; align-items: center;
-    padding: 0 4px;
+    padding: 0 2px;
   }
   .l3-status.streaming::before {
     content: '⚡ ';
     animation: breathe 1.2s ease-in-out infinite;
   }
-  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
   .l3-body {
     max-height: 140px;
     overflow-y: auto;
     font-size: 12px;
     line-height: 1.55;
     color: var(--hud-fg);
-    background: rgba(255,255,255,0.06);
-    border-radius: 8px;
-    padding: 8px 10px;
+    background: rgba(10, 9, 16, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
     white-space: pre-wrap;
     word-break: break-word;
     -webkit-user-select: text; user-select: text;
   }
   .l3-actions {
     display: none;
-    gap: 6px;
+    gap: 8px; justify-content: flex-end;
     font-size: 11px;
-    color: var(--hud-muted);
-    padding: 0 4px;
+    padding: 2px;
   }
   #panel.l3-done .l3-actions { display: flex; }
-  .l3-actions .primary {
-    color: var(--hud-ready); font-weight: 600;
-  }
-  .header {
-    font-size: 11px; letter-spacing: 0.4px;
+  .l3-actions span {
+    padding: 3px 8px; border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
     color: var(--hud-muted);
-    display: flex; justify-content: space-between; align-items: center;
-    padding: 0 4px 4px;
+    font-size: 10px; font-family: ui-monospace, monospace;
   }
-  .slot {
-    display: flex; align-items: center; gap: 10px;
-    padding: 8px 10px;
-    border-radius: 10px;
-    font-size: 13px;
-    cursor: pointer;
-    transition: background 120ms ease;
+  .l3-actions .primary {
+    background: rgba(53, 214, 197, 0.18);
+    border: 1px solid rgba(53, 214, 197, 0.35);
+    color: var(--hud-ready); font-weight: 700;
   }
-  .slot .key {
-    width: 22px; height: 22px;
-    display: inline-flex; align-items: center; justify-content: center;
-    background: rgba(255,255,255,0.12);
-    border-radius: 6px;
-    font-size: 12px; font-weight: 600;
-    color: var(--hud-fg);
-  }
-  .slot .label { flex: 1; }
-  .slot .shortcut { font-size: 11px; color: var(--hud-muted); }
-  .slot.highlighted { background: var(--hud-accent); }
-  .slot.highlighted .key { background: rgba(255,255,255,0.22); }
-  .slot.highlighted .shortcut { color: rgba(255,255,255,0.85); }
+
+  /* 就绪反馈态 */
   #ready-text {
     display: none;
     font-size: 13px; font-weight: 600;
     color: var(--hud-ready);
-    text-align: center; padding: 12px;
+    text-align: center; padding: 14px 10px;
+    letter-spacing: -0.01em;
   }
   #panel.ready #ready-text { display: block; }
-  #panel.ready .header, #panel.ready .slot { display: none; }
+  #panel.ready .header, #panel.ready #slots { display: none; }
 </style>
 </head>
 <body>
   <div id="panel" role="dialog" aria-label="PasteFlow Micro-HUD">
     <div class="header">
-      <span>PasteFlow · 选择格式动作</span>
-      <span id="target-app"></span>
+      <div class="app-badge">
+        <span class="dot"></span>
+        <span id="target-app">目标应用</span>
+      </div>
+      <span class="esc-hint">ESC 关闭</span>
     </div>
     <div id="slots"></div>
+    
     <!-- P3-1: L3 流式预览 (UI Spec §3.3 展开态) -->
     <div class="l3-preview">
       <div class="l3-status" id="l3-status">AI 正在生成…</div>
@@ -141,7 +255,8 @@
         <span>Esc 取消</span>
       </div>
     </div>
-    <div id="ready-text">已准备就绪，请按 ⌘V</div>
+    
+    <div id="ready-text">✨ 已准备就绪 · 请按 ⌘V 粘贴</div>
   </div>
 
 <script type="module">
@@ -170,7 +285,8 @@ function render() {
     row.innerHTML =
       `<span class="key">${a.slotKey}</span>` +
       `<span class="label"></span>` +
-      `<span class="shortcut">${a.shortcutHint ?? ''}</span>`;
+      `<span class="shortcut">${a.shortcutHint ?? ''}</span>` +
+      `<span class="enter-icon">↩</span>`;
     row.querySelector('.label').textContent = a.displayName;
     row.addEventListener('click', () => triggerSlot(a.slotKey));
     slotsEl.appendChild(row);
@@ -209,7 +325,7 @@ async function startL3(slotKey) {
   l3State = 'streaming';
   l3StreamId = null;
   l3Body.textContent = '';
-  l3Status.textContent = '⚡ AI 正在生成…';
+  l3Status.textContent = '⚡ AI 正在深度处理…';
   l3Status.classList.add('streaming');
   panel.classList.remove('ready', 'l3-done');
   panel.classList.add('streaming');
@@ -238,7 +354,7 @@ function commitL3() {
     .then(() => {
       panel.classList.remove('streaming', 'l3-done');
       panel.classList.add('ready');
-      document.getElementById('ready-text').textContent = '已准备就绪，请按 ⌘V';
+      document.getElementById('ready-text').textContent = '✨ 已准备就绪 · 请按 ⌘V 粘贴';
       setTimeout(hide, 600);
     })
     .catch(() => hide());
@@ -262,7 +378,7 @@ function commitL3() {
       l3State = 'done';
       panel.classList.remove('streaming');
       panel.classList.add('l3-done');
-      l3Status.textContent = '✅ 生成完毕 · ' + (p.firstTokenLatencyMs ?? 0) + 'ms 首字';
+      l3Status.textContent = '✅ 生成完毕 · ' + (p.firstTokenLatencyMs ?? 0) + 'ms 首字响应';
     }
   }
 }).catch(() => {});
@@ -281,7 +397,7 @@ function triggerSlot(slotKey) {
   }
   // Tier 0 上屏反馈: 绿色确认胶囊 600ms (UI Spec §3.2)
   panel.classList.add('ready');
-  document.getElementById('ready-text').textContent = '已准备就绪，请按 ⌘V';
+  document.getElementById('ready-text').textContent = '✨ 已准备就绪 · 请按 ⌘V 粘贴';
   setTimeout(hide, 600);
 }
 
@@ -327,7 +443,8 @@ window.addEventListener('keydown', (e) => {
     shortcutHint: a.shortcut_hint ?? a.shortcutHint ?? a.subtitle,
   }));
   sourceText = p.source_text ?? p.sourceText ?? '';
-  targetApp.textContent = p.frontmost_bundle ?? p.frontmostBundle ?? '';
+  const app = p.frontmost_bundle ?? p.frontmostBundle ?? '';
+  targetApp.textContent = app.split('.').pop() || '目标应用';
   show();
   (invoke ?? NOOP)('cmd_hud_visible', { visible: true });
 }).catch(() => {});

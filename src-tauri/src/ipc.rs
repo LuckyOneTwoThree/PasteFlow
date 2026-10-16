@@ -222,7 +222,19 @@ pub fn search_history(db: &HistoryDb, vm: &DrawerViewModel, args: &SearchHistory
     let results = db
         .search(&args.query, HISTORY_MAX_ITEMS)
         .map_err(|e| IpcError::new("STORAGE_ERROR", e.to_string()))?;
-    let filtered = vm.apply(results);
+    let filter = args
+        .tagFilter
+        .as_deref()
+        .and_then(|t| match t.to_uppercase().as_str() {
+            "MARKDOWN" => Some(crate::drawer::TypeFilter::Markdown),
+            "LINK" => Some(crate::drawer::TypeFilter::Link),
+            "CODE" => Some(crate::drawer::TypeFilter::Code),
+            "IMAGE" => Some(crate::drawer::TypeFilter::Image),
+            "ALL" | "" => Some(crate::drawer::TypeFilter::All),
+            _ => None,
+        })
+        .unwrap_or(vm.filter);
+    let filtered: Vec<_> = results.into_iter().filter(|it| filter.matches(it)).collect();
     let total = filtered.len() as i64;
     let start = args.offset.max(0) as usize;
     let items = filtered

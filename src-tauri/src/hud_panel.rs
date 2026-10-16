@@ -57,6 +57,7 @@ impl NonActivatingHUDPanel {
     ///
     /// # Safety
     /// 调用方必须在主线程调用 (AppKit MainThreadOnly 约束)
+    #[allow(dead_code)]
     pub unsafe fn new() -> Retained<Self> {
         // SAFETY: 调用方保证主线程 (见文档注释)
         let mtm = MainThreadMarker::new_unchecked();

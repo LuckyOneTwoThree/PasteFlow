@@ -6,7 +6,7 @@
 //!
 //! 本模块只负责窗口生命周期；面板布局与交互属 `dist/drawer.html`。
 
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 /// 抽屉窗口标识 (IPC Spec §1)
 pub const DRAWER_LABEL: &str = "drawer";
@@ -24,6 +24,9 @@ pub fn toggle(app: &tauri::AppHandle) {
             let _ = win.hide();
         } else {
             let _ = win.show();
+            let _ = win.set_focus();
+            let _ = app.emit_to(DRAWER_LABEL, "pasteflow://drawer-refresh", ());
+            let _ = app.emit("pasteflow://drawer-refresh", ());
         }
         return;
     }
@@ -60,6 +63,9 @@ pub fn cmd_drawer_visible(app: tauri::AppHandle, args: DrawerVisibleArgs) {
     if args.visible {
         if let Some(win) = app.get_webview_window(DRAWER_LABEL) {
             let _ = win.show();
+            let _ = win.set_focus();
+            let _ = app.emit_to(DRAWER_LABEL, "pasteflow://drawer-refresh", ());
+            let _ = app.emit("pasteflow://drawer-refresh", ());
         }
     } else {
         hide(&app);

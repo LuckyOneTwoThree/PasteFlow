@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="150" y1="98" x2="865" y2="935" gradientUnits="userSpaceOnUse"><stop stop-color="#7168F5"/><stop offset=".53" stop-color="#5047D5"/><stop offset="1" stop-color="#29265F"/></linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientTransform="matrix(0 506 -506 0 512 472)" gradientUnits="userSpaceOnUse"><stop stop-color="#A9A5FF" stop-opacity=".29"/><stop offset="1" stop-color="#A9A5FF" stop-opacity="0"/></radialGradient>
+    <linearGradient id="ribbonTop" x1="238" y1="321" x2="791" y2="519" gradientUnits="userSpaceOnUse"><stop stop-color="#F7F5FF"/><stop offset=".53" stop-color="#D9D7FF"/><stop offset="1" stop-color="#A9F4E7"/></linearGradient>
+    <linearGradient id="ribbonBottom" x1="247" y1="719" x2="790" y2="511" gradientUnits="userSpaceOnUse"><stop stop-color="#A7F4E8"/><stop offset=".48" stop-color="#C9C5FF"/><stop offset="1" stop-color="#F7F5FF"/></linearGradient>
+    <filter id="shadow" x="145" y="220" width="734" height="615" color-interpolation-filters="sRGB" filterUnits="userSpaceOnUse"><feGaussianBlur in="SourceAlpha" stdDeviation="20"/><feOffset dy="18"/><feComponentTransfer><feFuncA type="linear" slope=".23"/></feComponentTransfer><feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1024" height="1024" rx="230" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="230" fill="url(#halo)"/>
+  <g filter="url(#shadow)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Two folded streams approach the central gap from opposite directions. -->
+    <path d="M250 344C344 252 454 257 526 338L597 418C642 469 706 473 774 411" stroke="url(#ribbonTop)" stroke-width="92"/>
+    <path d="M250 680C344 772 454 767 526 686L597 606C642 555 706 551 774 613" stroke="url(#ribbonBottom)" stroke-width="92"/>
+  </g>
+  <!-- The quiet center aperture is the signature: transformation without a literal arrow. -->
+  <path d="M511 469L554 512L511 555L468 512Z" fill="#F6F5FF"/>
+  <circle cx="511" cy="512" r="9" fill="#746BF3"/>
+</svg>

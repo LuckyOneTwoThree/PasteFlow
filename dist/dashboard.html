@@ -1,11 +1,11 @@
 <!doctype html>
 <!--
   PasteFlow 主面板 (UI Spec v1.0 §5 `main-dashboard`)
-  880×600：左侧导航 200px + 右侧内容区 680px，三 Tab：
-    Tab 1 — 魔法滤镜商店（角色预设 + 配方卡片 + plainTextPolicy 下拉 + llm_stream 安全审查弹窗）
-    Tab 2 — 本地可观测性与诊断看板（changeCount / 前 20 次回调日志 / FormatGate 分布 / 导出脱敏包）
-    Tab 3 — AI 与权限设置（Tier 1 权限开关 + L3 模型配置）
-  关闭窗口 30s 后由 dashboard_window.rs 自动 destroy 释放 Webview。
+  880×600：左侧导航 210px + 右侧内容区 670px，三大 Tab：
+    Tab 1 — 魔法滤镜商店（角色预设 + 配方卡片 + Before/After 动态演练 + llm_stream 安全审查弹窗）
+    Tab 2 — 本地可观测性与诊断看板（实时指标 + FormatGate 门控分布 + 回调代数/嗅探审计 + 导出脱敏包）
+    Tab 3 — AI 与权限设置（Tier 1 权限开关 + L3 模型配置与 Ollama 探测）
+  视觉规范：深度统一采用「灵隙深色毛玻璃 (Obsidian Glass)」语言，对齐品牌设计标准。
 -->
 <html lang="zh-CN">
 <head>
@@ -13,224 +13,726 @@
 <title>灵贴 PasteFlow</title>
 <style>
   :root {
-    --bg: #f5f5f7; --fg: #1d1d1f; --muted: #86868b;
-    --card: #ffffff; --border: #e5e5ea; --accent: #0a84ff;
-    --ok: #30d158; --warn: #ff9f0a; --err: #ff453a;
-    --nav-w: 200px;
+    --bg-base: #0c0b12;
+    --bg-elevated: rgba(22, 21, 33, 0.72);
+    --bg-card: rgba(28, 27, 42, 0.65);
+    --bg-card-hover: rgba(36, 35, 54, 0.75);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-focus: rgba(113, 104, 245, 0.55);
+    --border-highlight: rgba(255, 255, 255, 0.14);
+    --fg-primary: #f8f8fc;
+    --fg-secondary: #9a98ab;
+    --fg-muted: #676577;
+    --brand: #7168f5;
+    --brand-hover: #827aff;
+    --brand-glow: rgba(113, 104, 245, 0.25);
+    --mint: #35d6c5;
+    --mint-glow: rgba(53, 214, 197, 0.18);
+    --amber: #f59e0b;
+    --amber-glow: rgba(245, 158, 11, 0.2);
+    --red: #ef4444;
+    --red-glow: rgba(239, 68, 68, 0.2);
+    --nav-w: 216px;
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 8px;
   }
+
   * { margin: 0; padding: 0; box-sizing: border-box; }
+
   body {
-    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
-    background: var(--bg); color: var(--fg);
-    width: 880px; height: 600px; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Segoe UI", sans-serif;
+    background: var(--bg-base);
+    background-image:
+      radial-gradient(ellipse at 15% 0%, rgba(113, 104, 245, 0.15) 0%, transparent 55%),
+      radial-gradient(ellipse at 85% 100%, rgba(53, 214, 197, 0.08) 0%, transparent 50%);
+    color: var(--fg-primary);
+    width: 880px; height: 600px;
+    overflow: hidden;
     display: flex;
+    -webkit-font-smoothing: antialiased;
+    -webkit-user-select: none; user-select: none;
   }
-  /* 左侧导航 200px */
+
+  /* 自定义极简滚动条 */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 999px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.24); }
+
+  /* 左侧侧边栏 */
   nav {
-    width: var(--nav-w); height: 100%;
-    background: rgba(255,255,255,0.7);
-    border-right: 1px solid var(--border);
-    padding: 20px 12px;
-    display: flex; flex-direction: column; gap: 4px;
+    width: var(--nav-w);
+    height: 100%;
+    background: rgba(14, 13, 21, 0.7);
+    backdrop-filter: blur(28px) saturate(180%);
+    -webkit-backdrop-filter: blur(28px) saturate(180%);
+    border-right: 1px solid var(--border-subtle);
+    padding: 24px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
     -webkit-app-region: drag;
   }
-  nav .brand {
-    font-size: 15px; font-weight: 700;
-    padding: 0 10px 16px;
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 2px 8px 22px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 12px;
     -webkit-app-region: no-drag;
   }
-  nav .brand .en { font-size: 11px; color: var(--muted); font-weight: 500; }
-  nav button {
-    -webkit-app-region: no-drag;
-    text-align: left; border: 0; background: transparent;
-    padding: 9px 12px; border-radius: 9px;
-    font-size: 13px; color: var(--fg); cursor: pointer;
+  .brand-logo {
+    width: 32px; height: 32px;
+    border-radius: 9px;
+    background: linear-gradient(135deg, #7168f5, #35d6c5);
+    display: grid; place-items: center;
+    box-shadow: 0 4px 14px rgba(113, 104, 245, 0.35);
+    flex: none;
   }
-  nav button.active { background: var(--accent); color: #fff; font-weight: 600; }
-  /* 右侧内容区 680px */
-  main { width: 680px; height: 100%; padding: 22px 26px; overflow-y: auto; }
-  h2 { font-size: 18px; margin-bottom: 4px; }
-  .sub { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+  .brand-logo svg { width: 20px; height: 20px; }
+  .brand-info { display: flex; flex-direction: column; line-height: 1.25; }
+  .brand-name {
+    font-size: 14px; font-weight: 700; letter-spacing: -0.02em;
+    color: #fff;
+  }
+  .brand-sub {
+    font-size: 10px; color: var(--fg-secondary);
+    letter-spacing: 0.04em;
+    display: flex; align-items: center; gap: 4px;
+  }
+  .brand-sub .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--mint);
+    box-shadow: 0 0 6px var(--mint);
+  }
+
+  nav button[data-tab] {
+    -webkit-app-region: no-drag;
+    display: flex; align-items: center; gap: 10px;
+    text-align: left; border: 1px solid transparent;
+    background: transparent;
+    padding: 10px 12px;
+    border-radius: var(--radius-sm);
+    font-size: 13px; font-weight: 500;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    transition: all 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  nav button[data-tab]:hover {
+    color: var(--fg-primary);
+    background: rgba(255, 255, 255, 0.05);
+  }
+  nav button[data-tab].active {
+    background: linear-gradient(135deg, rgba(113, 104, 245, 0.22), rgba(113, 104, 245, 0.08));
+    border-color: rgba(113, 104, 245, 0.35);
+    color: #ffffff;
+    font-weight: 600;
+    box-shadow: 0 4px 16px rgba(113, 104, 245, 0.15);
+  }
+  nav button[data-tab] .nav-icon {
+    font-size: 15px; width: 18px; display: inline-flex; justify-content: center;
+  }
+
+  .nav-spacer { flex: 1; }
+  .nav-footer {
+    padding: 10px 8px 0;
+    font-size: 11px; color: var(--fg-muted);
+    border-top: 1px solid var(--border-subtle);
+    display: flex; justify-content: space-between; align-items: center;
+    -webkit-app-region: no-drag;
+  }
+  .nav-badge {
+    padding: 2px 6px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    font-size: 10px; font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--fg-secondary);
+  }
+
+  /* 右侧内容区 */
+  main {
+    flex: 1; height: 100%;
+    padding: 26px 30px;
+    overflow-y: auto;
+    background: transparent;
+  }
+
+  .page-header {
+    margin-bottom: 22px;
+  }
+  .page-title {
+    font-size: 20px; font-weight: 700; letter-spacing: -0.03em;
+    color: #fff; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .page-desc {
+    font-size: 12px; color: var(--fg-secondary);
+  }
 
   /* Tab 1 滤镜商店 */
-  .presets { display: flex; gap: 8px; margin-bottom: 16px; }
+  .presets {
+    display: flex; gap: 8px; margin-bottom: 18px;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 4px; border-radius: 12px;
+    border: 1px solid var(--border-subtle);
+    width: fit-content;
+  }
   .presets button {
-    padding: 7px 14px; border-radius: 18px;
-    border: 1px solid var(--border); background: var(--card);
-    font-size: 12px; cursor: pointer;
+    padding: 6px 14px; border-radius: 9px;
+    border: 1px solid transparent; background: transparent;
+    font-size: 12px; font-weight: 500;
+    color: var(--fg-secondary);
+    cursor: pointer;
+    transition: all 140ms ease;
   }
-  .presets button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .presets button:hover { color: var(--fg-primary); }
+  .presets button.on {
+    background: rgba(113, 104, 245, 0.22);
+    border-color: rgba(113, 104, 245, 0.35);
+    color: #fff; font-weight: 600;
+    box-shadow: 0 2px 8px rgba(113, 104, 245, 0.15);
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
   .card {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px;
+    background: var(--bg-card);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 16px;
+    display: flex; flex-direction: column; gap: 10px;
+    transition: all 180ms ease;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
   }
-  .card h3 { font-size: 13px; margin-bottom: 6px; }
-  .card .meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
-  .card .demo {
-    background: var(--bg); border-radius: 8px;
-    padding: 8px 10px; font-size: 11px; color: var(--muted);
-    margin-bottom: 10px; min-height: 52px;
+  .card:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--border-highlight);
+    transform: translateY(-1px);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
   }
-  .row { display: flex; align-items: center; gap: 8px; }
-  .row select {
-    flex: 1; padding: 5px 8px; border-radius: 7px;
-    border: 1px solid var(--border); font-size: 11px; background: #fff;
+  .card-head {
+    display: flex; justify-content: space-between; align-items: flex-start;
   }
+  .card h3 {
+    font-size: 14px; font-weight: 600; color: #fff;
+    letter-spacing: -0.01em;
+  }
+  .card .meta {
+    font-size: 11px; color: var(--fg-muted);
+    font-family: ui-monospace, monospace;
+    margin-top: 2px;
+  }
+  .badge {
+    font-size: 10px; padding: 2px 8px; border-radius: 999px;
+    font-weight: 500;
+  }
+  .badge.builtin {
+    background: rgba(53, 214, 197, 0.15);
+    color: var(--mint);
+    border: 1px solid rgba(53, 214, 197, 0.3);
+  }
+  .badge.community {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--amber);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+
+  .demo-box {
+    background: rgba(10, 9, 16, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--fg-secondary);
+    min-height: 56px;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .demo-tag {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--fg-muted); margin-bottom: 4px; font-weight: 700;
+  }
+  .demo-content {
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: #dedcf0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .demo-content .arrow { color: var(--brand); margin: 0 4px; }
+  .demo-content .highlight { color: var(--mint); }
+
+  .card-ctrl {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-top: 2px;
+  }
+  .policy-select {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg-primary);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    outline: none;
+    cursor: pointer;
+    transition: all 140ms ease;
+  }
+  .policy-select:focus {
+    border-color: var(--border-focus);
+    background: rgba(255, 255, 255, 0.09);
+  }
+  .policy-select option {
+    background: #171622; color: #fff;
+  }
+
+  /* 切换开关 */
   .switch {
-    width: 34px; height: 20px; border-radius: 10px;
-    background: var(--border); position: relative; cursor: pointer; border: 0;
+    width: 36px; height: 20px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    position: relative; cursor: pointer; border: 0;
+    transition: background 180ms cubic-bezier(0.16, 1, 0.3, 1);
+    flex: none;
   }
-  .switch.on { background: var(--ok); }
+  .switch.on {
+    background: var(--mint);
+    box-shadow: 0 0 10px var(--mint-glow);
+  }
   .switch::after {
     content: ''; position: absolute; top: 2px; left: 2px;
-    width: 16px; height: 16px; border-radius: 50%; background: #fff;
-    transition: left 120ms;
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+    transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1);
   }
-  .switch.on::after { left: 16px; }
+  .switch.on::after {
+    transform: translateX(16px);
+  }
 
-  /* Tab 2 诊断 */
-  .stat-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  /* Tab 2 诊断面板 */
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px; margin-bottom: 20px;
+  }
   .stat {
-    flex: 1; background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    position: relative; overflow: hidden;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
   }
-  .stat .v { font-size: 22px; font-weight: 700; }
-  .stat .k { font-size: 11px; color: var(--muted); }
-  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 110px; padding: 10px 4px 0; }
-  .bar-chart .bar { flex: 1; background: var(--accent); border-radius: 5px 5px 0 0; min-height: 3px; }
-  .bar-chart .bar .cap { font-size: 9px; color: var(--muted); text-align: center; margin-top: 4px; }
-  .log-list { font-size: 11px; }
-  .log-list table { width: 100%; border-collapse: collapse; }
-  .log-list th, .log-list td {
-    text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border);
+  .stat::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, var(--brand), transparent);
+    opacity: 0.6;
   }
-  .log-list th { color: var(--muted); font-weight: 500; }
-  .pill {
-    display: inline-block; padding: 2px 8px; border-radius: 10px;
-    font-size: 10px; background: var(--bg);
+  .stat .v {
+    font-size: 26px; font-weight: 700; color: #fff;
+    letter-spacing: -0.03em;
+    font-family: ui-monospace, SFMono-Regular, monospace;
   }
-  .btn {
-    padding: 8px 16px; border-radius: 9px; border: 0;
-    background: var(--accent); color: #fff; font-size: 12px; cursor: pointer;
-    margin-top: 14px;
+  .stat .k {
+    font-size: 11px; color: var(--fg-secondary);
+    font-weight: 500; margin-top: 4px;
+    display: flex; align-items: center; justify-content: space-between;
   }
-  /* Tab 3 设置 */
-  .set-group {
-    background: var(--card); border: 1px solid var(--border);
-    border-radius: 12px; padding: 16px; margin-bottom: 14px;
-  }
-  .set-group h3 { font-size: 13px; margin-bottom: 4px; }
-  .set-group .desc { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
-  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-  .field label { width: 110px; font-size: 12px; color: var(--muted); }
-  .field input {
-    flex: 1; padding: 7px 10px; border-radius: 8px;
-    border: 1px solid var(--border); font-size: 12px;
-  }
-  .risk {
-    font-size: 11px; color: var(--warn);
-    background: rgba(255,159,10,0.1); border-radius: 8px;
-    padding: 10px; margin-top: 8px;
+  .stat .tag {
+    font-size: 10px; padding: 1px 6px; border-radius: 999px;
+    background: rgba(113, 104, 245, 0.15); color: var(--brand);
+    font-weight: 600;
   }
 
-  /* llm_stream 安全审查弹窗 (UI Spec §5.1) */
+  .diag-section-title {
+    font-size: 13px; font-weight: 600; color: #fff;
+    margin: 18px 0 10px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .diag-section-title .hint {
+    font-size: 11px; font-weight: normal; color: var(--fg-muted);
+  }
+
+  .chart-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    margin-bottom: 20px;
+  }
+  .bar-chart {
+    display: flex; align-items: flex-end; gap: 14px;
+    height: 118px; padding-top: 10px;
+  }
+  .bar-chart .bar-col {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    gap: 6px; height: 100%; justify-content: flex-end;
+  }
+  .bar-chart .bar {
+    width: 100%;
+    background: linear-gradient(180deg, var(--brand), rgba(113, 104, 245, 0.35));
+    border-radius: 6px 6px 2px 2px;
+    min-height: 4px;
+    transition: height 300ms cubic-bezier(0.16, 1, 0.3, 1);
+    box-shadow: 0 0 12px var(--brand-glow);
+  }
+  .bar-chart .bar:hover {
+    background: linear-gradient(180deg, #8c84ff, rgba(140, 132, 255, 0.5));
+  }
+  .bar-chart .val {
+    font-size: 11px; font-weight: 700; color: #fff;
+    font-family: ui-monospace, monospace;
+  }
+  .bar-chart .cap {
+    font-size: 10px; color: var(--fg-secondary);
+    text-align: center; font-weight: 500;
+  }
+
+  .log-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  }
+  .log-table {
+    width: 100%; border-collapse: collapse;
+    font-size: 11px;
+  }
+  .log-table th {
+    text-align: left; padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--fg-muted); font-weight: 600;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .log-table td {
+    padding: 9px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    color: var(--fg-secondary);
+  }
+  .log-table tr:last-child td { border-bottom: 0; }
+  .log-table tr:hover td {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .pill-variant {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 2px 8px; border-radius: 999px;
+    font-size: 10px; font-weight: 600;
+    font-family: ui-monospace, monospace;
+  }
+  .pill-variant.rich_office {
+    background: rgba(113, 104, 245, 0.16); color: #b4afff;
+    border: 1px solid rgba(113, 104, 245, 0.3);
+  }
+  .pill-variant.im_cleaned_text {
+    background: rgba(53, 214, 197, 0.15); color: var(--mint);
+    border: 1px solid rgba(53, 214, 197, 0.3);
+  }
+  .pill-variant.raw_passthrough {
+    background: rgba(255, 255, 255, 0.07); color: #d4d4dd;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+  }
+  .pill-variant.html_suppressed {
+    background: rgba(245, 158, 11, 0.15); color: var(--amber);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+  }
+  .pill-kind {
+    font-size: 9px; padding: 2px 6px; border-radius: 4px;
+    font-weight: 500;
+  }
+  .pill-kind.real {
+    background: rgba(53, 214, 197, 0.12); color: var(--mint);
+  }
+  .pill-kind.sniffer {
+    background: rgba(239, 68, 68, 0.12); color: #fca5a5;
+  }
+  .time-text {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    color: var(--fg-muted);
+  }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 9px 18px; border-radius: var(--radius-sm); border: 0;
+    background: linear-gradient(135deg, var(--brand), #5b52e0);
+    color: #fff; font-size: 12px; font-weight: 600;
+    cursor: pointer; transition: all 160ms ease;
+    box-shadow: 0 4px 14px var(--brand-glow);
+  }
+  .btn:hover {
+    background: linear-gradient(135deg, var(--brand-hover), #6960f0);
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px var(--brand-glow);
+  }
+  .btn:active { transform: translateY(0); }
+  .btn.ghost {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--border-subtle);
+    color: var(--fg-primary);
+    box-shadow: none;
+  }
+  .btn.ghost:hover {
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Tab 3 设置 */
+  .set-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    padding: 18px 20px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  }
+  .set-card h3 {
+    font-size: 14px; font-weight: 600; color: #fff;
+    margin-bottom: 4px; display: flex; align-items: center; gap: 8px;
+  }
+  .set-card .desc {
+    font-size: 12px; color: var(--fg-secondary);
+    margin-bottom: 16px;
+  }
+  .field {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 16px; margin-bottom: 12px;
+  }
+  .field label {
+    font-size: 12px; font-weight: 500; color: var(--fg-secondary);
+    width: 100px; flex: none;
+  }
+  .field input {
+    flex: 1; padding: 8px 12px; border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-subtle);
+    color: #fff; font-size: 12px; outline: none;
+    transition: all 140ms ease;
+    font-family: ui-monospace, monospace;
+  }
+  .field input:focus {
+    border-color: var(--border-focus);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  .risk-banner {
+    font-size: 11px; line-height: 1.5; color: #fbbf24;
+    background: rgba(245, 158, 11, 0.08);
+    border: 1px solid rgba(245, 158, 11, 0.22);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px; margin-top: 10px;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+
+  /* 安全审查模态弹窗 */
   .modal-mask {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    backdrop-filter: blur(12px);
     display: none; align-items: center; justify-content: center;
+    z-index: 99;
   }
   .modal-mask.open { display: flex; }
   .modal {
-    width: 520px; background: var(--card); border-radius: 16px;
-    padding: 22px; box-shadow: 0 24px 64px rgba(0,0,0,0.28);
+    width: 520px;
+    background: #191826;
+    border: 1px solid var(--border-highlight);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
   }
-  .modal h3 { font-size: 15px; margin-bottom: 10px; }
+  .modal h3 {
+    font-size: 16px; font-weight: 700; color: #fff;
+    margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .modal .warn-text {
+    font-size: 12px; color: #fca5a5; line-height: 1.5;
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.25);
+    border-radius: var(--radius-sm); padding: 10px 12px;
+    margin-bottom: 14px;
+  }
   .modal pre {
-    background: var(--bg); border-radius: 10px; padding: 12px;
-    font-size: 11px; overflow-x: auto; margin: 10px 0;
+    background: #0d0c14; border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm); padding: 12px;
+    font-size: 11px; font-family: ui-monospace, monospace;
+    color: #e5e5f0; max-height: 160px; overflow-y: auto;
+    margin-bottom: 18px; white-space: pre-wrap;
   }
-  .modal .warn-text { font-size: 12px; color: var(--err); margin-bottom: 12px; }
   .modal .actions { display: flex; gap: 10px; justify-content: flex-end; }
-  .modal .actions .ghost {
-    background: transparent; border: 1px solid var(--border); color: var(--fg);
-  }
 </style>
 </head>
 <body>
   <nav>
-    <div class="brand">灵贴 PasteFlow<br /><span class="en">Format Glue · v0.1.5</span></div>
-    <button data-tab="store" class="active">✨ 魔法滤镜商店</button>
-    <button data-tab="diag">📊 诊断看板</button>
-    <button data-tab="settings">⚙️ AI 与权限设置</button>
+    <div class="brand">
+      <div class="brand-logo">
+        <!-- 灵隙 Logo SVG -->
+        <svg viewBox="0 0 1024 1024" fill="none" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M250 344C344 252 454 257 526 338L597 418C642 469 706 473 774 411" stroke="#fff" stroke-width="120"/>
+          <path d="M250 680C344 772 454 767 526 686L597 606C642 555 706 551 774 613" stroke="#A9F4E7" stroke-width="120"/>
+          <circle cx="512" cy="512" r="48" fill="#fff"/>
+        </svg>
+      </div>
+      <div class="brand-info">
+        <span class="brand-name">灵贴 PasteFlow</span>
+        <span class="brand-sub"><span class="dot"></span>自动挡 · 运行中</span>
+      </div>
+    </div>
+
+    <button data-tab="store" class="active">
+      <span class="nav-icon">✨</span>魔法滤镜商店
+    </button>
+    <button data-tab="diag">
+      <span class="nav-icon">📊</span>可观测性看板
+    </button>
+    <button data-tab="settings">
+      <span class="nav-icon">⚙️</span>AI 与高级设置
+    </button>
+
+    <div class="nav-spacer"></div>
+
+    <div class="nav-footer">
+      <span>Core v0.1.5</span>
+      <span class="nav-badge">Tier 0 就绪</span>
+    </div>
   </nav>
 
   <main>
     <!-- Tab 1: 滤镜商店 -->
     <section id="tab-store">
-      <h2>魔法滤镜商店</h2>
-      <div class="sub">内置与社区 PipeRecipe 卡片 · 纯文本通道策略可在卡片内下拉切换</div>
+      <div class="page-header">
+        <h2 class="page-title">✨ 魔法滤镜商店</h2>
+        <div class="page-desc">按需激活智能管道配方 · 纯文本通道策略可在卡片内随时切换</div>
+      </div>
+
       <div class="presets">
         <button class="on">💼 日常办公</button>
         <button>📊 财务数据</button>
         <button>🎓 学术研究</button>
         <button>💻 开发者</button>
       </div>
+
       <div class="grid" id="recipe-grid"></div>
     </section>
 
     <!-- Tab 2: 诊断看板 -->
     <section id="tab-diag" hidden>
-      <h2>本地可观测性与诊断</h2>
-      <div class="sub">全部数据驻留本地 · 导出包不含任何剪贴板正文</div>
-      <div class="stat-row">
-        <div class="stat"><div class="v" id="d-change">—</div><div class="k">当前 changeCount</div></div>
-        <div class="stat"><div class="v" id="d-served">—</div><div class="k">今日有效转换</div></div>
-        <div class="stat"><div class="v" id="d-p95">—</div><div class="k">回调耗时 p95 (µs)</div></div>
+      <div class="page-header">
+        <h2 class="page-title">📊 本地可观测性与诊断看板</h2>
+        <div class="page-desc">数据 100% 驻留本地 · 导出诊断包不含任何剪贴板正文隐私内容</div>
       </div>
-      <h3 style="font-size:13px;margin-bottom:6px;">FormatGate 拦截分布</h3>
-      <div class="bar-chart" id="gate-chart"></div>
-      <h3 style="font-size:13px;margin:14px 0 6px;">最近 20 次粘贴回调日志</h3>
-      <div class="log-list">
-        <table>
-          <thead><tr><th>前台应用</th><th>变体</th><th>耗时</th></tr></thead>
+
+      <div class="stat-row">
+        <div class="stat">
+          <div class="v" id="d-change">—</div>
+          <div class="k"><span>剪贴板序列号 (changeCount)</span><span class="tag">实时监听</span></div>
+        </div>
+        <div class="stat">
+          <div class="v" id="d-served" style="color: var(--mint);">—</div>
+          <div class="k"><span>今日有效智能转换</span><span class="tag" style="color:var(--mint);background:rgba(53,214,197,0.15)">累计供给</span></div>
+        </div>
+        <div class="stat">
+          <div class="v" id="d-p95" style="color: #b4afff;">—</div>
+          <div class="k"><span>回调耗时 p95 (µs)</span><span class="tag" style="color:#b4afff;background:rgba(113,104,245,0.15)">&lt; 8ms 预算</span></div>
+        </div>
+      </div>
+
+      <div class="diag-section-title">
+        <span>FormatGate 格式门控拦截分布</span>
+        <span class="hint">0 字节元数据识别 · 避免触发源应用延迟渲染</span>
+      </div>
+      <div class="chart-box">
+        <div class="bar-chart" id="gate-chart"></div>
+      </div>
+
+      <div class="diag-section-title">
+        <span>最近 20 次粘贴回调审计日志</span>
+        <span class="hint">严格区分前台消费供给与后台嗅探</span>
+      </div>
+      <div class="log-container">
+        <table class="log-table">
+          <thead>
+            <tr>
+              <th>前台应用 (Target)</th>
+              <th>供给变体</th>
+              <th>代数</th>
+              <th>性质</th>
+              <th style="text-align:right;">耗时</th>
+            </tr>
+          </thead>
           <tbody id="log-body"></tbody>
         </table>
       </div>
-      <button class="btn" id="export-report">一键导出脱敏诊断包</button>
+
+      <button class="btn" id="export-report">
+        <span>📤 一键导出脱敏诊断包 (JSON)</span>
+      </button>
     </section>
 
     <!-- Tab 3: 设置 -->
     <section id="tab-settings" hidden>
-      <h2>AI 与权限设置</h2>
-      <div class="sub">Tier 1 权限为可选增强 · 不授权时自动挡完整可用</div>
-      <div class="set-group">
-        <h3>Tier 1 · 辅助功能（Accessibility）</h3>
-        <div class="desc">授权后 HUD 动作可自动注入 ⌘V（80ms 缩小淡出反馈）</div>
-        <div class="field">
-          <label>自动注入 ⌘V</label>
+      <div class="page-header">
+        <h2 class="page-title">⚙️ AI 与高级权限设置</h2>
+        <div class="page-desc">核心自动挡无需任何权限 · 高级增强功能遵循最小授权原则</div>
+      </div>
+
+      <div class="set-card">
+        <h3><span>🦾 Tier 1 · 辅助功能自动化增强</span></h3>
+        <div class="desc">授权系统辅助功能权限后，Micro-HUD 执行动作可自动模拟按键注入 ⌘V</div>
+        <div class="field" style="margin-bottom:0;">
+          <label style="width:auto;">自动注入 ⌘V (无需手动按键)</label>
           <button class="switch" id="sw-a11y"></button>
         </div>
-        <div class="risk">⚠️ 授权 PasteFlow「辅助功能」后可模拟键盘输入（仅用于 HUD 动作自动 ⌘V）。不授权时所有动作改为「已准备就绪，请按 ⌘V」半自动模式，核心链路不受影响。</div>
+        <div class="risk-banner">
+          <span>⚠️</span>
+          <span>不授权此项时，PasteFlow 依然 100% 完整可用，动作执行后将写入剪贴板并提示「已就绪，请按 ⌘V」。</span>
+        </div>
       </div>
-      <div class="set-group">
-        <h3>L3 · 模型配置（流式 AI）</h3>
-        <div class="desc">BYOK 直连本地/云端 · 可随时禁用</div>
-        <div class="field"><label>Base URL</label><input id="llm-base" placeholder="http://127.0.0.1:11434/v1" /></div>
-        <div class="field"><label>API Key</label><input id="llm-key" type="password" placeholder="sk-..." /></div>
-        <div class="field"><label>模型名称</label><input id="llm-model" placeholder="qwen3:8b" /></div>
-        <button class="btn" id="ollama-test">探测 Ollama 连接</button>
-        <div class="sub" id="ollama-status" style="margin:10px 0 0;"></div>
+
+      <div class="set-card">
+        <h3><span>🧠 L3 · 本地 / 云端流式 AI 模型 (BYOK)</span></h3>
+        <div class="desc">仅用于【贪吃蛇智能汇总】与【职场高情商润色】· 敏感密钥绝对不进 AI 提示词</div>
+        
+        <div class="field">
+          <label>API Endpoint</label>
+          <input id="llm-base" placeholder="http://127.0.0.1:11434/v1" />
+        </div>
+        <div class="field">
+          <label>API Key</label>
+          <input id="llm-key" type="password" placeholder="本地 Ollama 可留空，云端填 sk-..." />
+        </div>
+        <div class="field">
+          <label>模型名称</label>
+          <input id="llm-model" placeholder="qwen2.5:7b / gpt-4o-mini" />
+        </div>
+
+        <div style="display:flex; align-items:center; gap:12px; margin-top:14px;">
+          <button class="btn ghost" id="ollama-test">
+            <span>⚡ 探测本地 Ollama 连接</span>
+          </button>
+          <div id="ollama-status" style="font-size:12px; color:var(--fg-secondary);"></div>
+        </div>
       </div>
     </section>
   </main>
 
-  <!-- llm_stream 社区配方安全审查弹窗 (UI Spec §5.1) -->
+  <!-- 社区配方安全审查模态框 -->
   <div class="modal-mask" id="review-modal">
     <div class="modal">
-      <h3>⚠️ 社区配方安全审查</h3>
+      <h3>🛡️ 社区配方安全审查 (Anti-Prompt-Injection)</h3>
       <div class="warn-text">
-        该配方将调用云端/本地大模型，系统已锁定只读安全前缀且禁止访问含 DLP 敏感凭证的剪贴板。
+        该配方包含大模型调用逻辑。系统已自动挂载只读只写护栏，并彻底阻断敏感密钥凭证外发。
       </div>
+      <div style="font-size:11px; color:var(--fg-muted); margin-bottom:6px;">配方预置 Prompt 源码:</div>
       <pre id="review-prompt">(fallbackPrompt 未载入)</pre>
       <div class="actions">
         <button class="btn ghost" id="review-cancel">取消导入</button>
@@ -250,13 +752,37 @@ document.querySelectorAll('nav button[data-tab]').forEach(btn => {
     document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     for (const id of ['store', 'diag', 'settings']) {
-      document.getElementById('tab-' + id).hidden = id !== btn.dataset.tab;
+      const section = document.getElementById('tab-' + id);
+      if (section) section.hidden = (id !== btn.dataset.tab);
     }
     if (btn.dataset.tab === 'diag') loadDiagnostics();
   });
 });
 
-// —— Tab 1: 配方卡片 ——
+// —— Tab 1: 配方展示 ——
+const DEMO_PREVIEWS = {
+  'builtin.markdown-to-office': {
+    tag: 'Word / 飞书 / 微信 / 终端 自适应',
+    demo: '# 标题 → <span class="highlight">原生富文本标题</span> <span class="arrow">|</span> 微信去星号'
+  },
+  'builtin.social-link-cleaner': {
+    tag: '淘宝 / 小红书 / B站 / 抖音',
+    demo: 'item.htm?id=123&spm=a21... <span class="arrow">→</span> <span class="highlight">item.htm?id=123</span>'
+  },
+  'builtin.web-cleaner': {
+    tag: '网页复制内容脱毒洗白',
+    demo: '&lt;div style="color:red..."&gt;正文 <span class="arrow">→</span> <span class="highlight">干净纯文本段落</span>'
+  },
+  'builtin.pdf-reflow': {
+    tag: '学术论文 / 电子书断行重排',
+    demo: 'inter- <br/>rupted <span class="arrow">→</span> <span class="highlight">interrupted (单句缝合)</span>'
+  },
+  'builtin.dev-swiss': {
+    tag: 'JSON 转类型 · 时间戳 · curl 转 fetch',
+    demo: '{"name":"api"} <span class="arrow">→</span> <span class="highlight">interface Api { name: string }</span>'
+  }
+};
+
 async function loadRecipes() {
   const recipes = await (invoke ?? NOOP)('cmd_list_pipe_recipes').catch(() => []);
   const grid = document.getElementById('recipe-grid');
@@ -264,17 +790,29 @@ async function loadRecipes() {
   (recipes ?? []).forEach(r => {
     const card = document.createElement('div');
     card.className = 'card';
+    const preview = DEMO_PREVIEWS[r.id] ?? {
+      tag: '格式转换',
+      demo: '原始文本 <span class="arrow">→</span> <span class="highlight">目标自适应清洗</span>'
+    };
     card.innerHTML = `
-      <h3>${r.displayName ?? r.id}</h3>
-      <div class="meta">${r.id} · ${r.builtin ? '内置' : '社区'}</div>
-      <div class="demo">Before → After 演示</div>
-      <div class="row">
-        <button class="switch on" data-on="1"></button>
-        <select>
-          <option value="DYNAMIC_BY_TARGET">智能按目标应用 DYNAMIC</option>
-          <option value="PASSTHROUGH">保持源码 PASSTHROUGH</option>
-          <option value="CLEANED">始终净化 CLEANED</option>
+      <div class="card-head">
+        <div>
+          <h3>${r.displayName ?? r.id}</h3>
+          <div class="meta">${r.id}</div>
+        </div>
+        <span class="badge ${r.builtin ? 'builtin' : 'community'}">${r.builtin ? '系统内置' : '社区配方'}</span>
+      </div>
+      <div class="demo-box">
+        <div class="demo-tag">${preview.tag}</div>
+        <div class="demo-content">${preview.demo}</div>
+      </div>
+      <div class="card-ctrl">
+        <select class="policy-select">
+          <option value="DYNAMIC_BY_TARGET">智能按目标应用 (DYNAMIC)</option>
+          <option value="PASSTHROUGH">保持源码 (PASSTHROUGH)</option>
+          <option value="CLEANED">始终净化 (CLEANED)</option>
         </select>
+        <button class="switch on" title="开关滤镜"></button>
       </div>`;
     card.querySelector('select').value = r.plainTextPolicy ?? 'DYNAMIC_BY_TARGET';
     card.querySelector('.switch').addEventListener('click', (e) => {
@@ -284,33 +822,59 @@ async function loadRecipes() {
   });
 }
 
-// —— Tab 2: 诊断数据 ——
+// —— Tab 2: 诊断看板 ——
+const GATE_NAMES = {
+  'G1A': 'G1A 私有对象',
+  'G1B': 'G1B 纯图片',
+  'G2': 'G2 多条目',
+  'G3': 'G3 文件复制',
+  'G4': 'G4 冗余废弃',
+  'G5': 'G5 放行/超大'
+};
 const GATE_LABELS = ['G1A', 'G1B', 'G2', 'G3', 'G4', 'G5'];
+
 async function loadDiagnostics() {
   const snap = await (invoke ?? NOOP)('cmd_get_diagnostic_snapshot').catch(() => null);
   document.getElementById('d-change').textContent = snap?.changeCount ?? '—';
-  document.getElementById('d-served').textContent = snap?.todayServed ?? '—';
-  document.getElementById('d-p95').textContent = snap?.latency?.p95Us ?? '—';
+  document.getElementById('d-served').textContent = snap?.todayServed ?? '0';
+  document.getElementById('d-p95').textContent = snap?.latency?.p95Us ? `${snap.latency.p95Us} µs` : '0 µs';
+
+  // 门控柱状图渲染
   const chart = document.getElementById('gate-chart');
   chart.innerHTML = '';
   const gate = snap?.gate ?? {};
   const max = Math.max(1, ...GATE_LABELS.map(k => gate[k] ?? 0));
   GATE_LABELS.forEach(k => {
-    const bar = document.createElement('div');
-    bar.className = 'bar';
-    const h = Math.round(((gate[k] ?? 0) / max) * 82);
-    bar.style.height = (h + 18) + 'px';
-    bar.innerHTML = `<div class="cap">${k}<br />${gate[k] ?? 0}</div>`;
-    chart.appendChild(bar);
+    const col = document.createElement('div');
+    col.className = 'bar-col';
+    const count = gate[k] ?? 0;
+    const h = Math.round((count / max) * 72);
+    col.innerHTML = `
+      <div class="val">${count}</div>
+      <div class="bar" style="height:${h + 4}px"></div>
+      <div class="cap">${GATE_NAMES[k] ?? k}</div>`;
+    chart.appendChild(col);
   });
+
+  // 日志列表渲染 (支持 generation 与 serveKind)
   const body = document.getElementById('log-body');
   body.innerHTML = '';
-  (snap?.served ?? []).slice(0, 20).forEach(rec => {
+  const list = snap?.served ?? [];
+  if (list.length === 0) {
+    body.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:22px;color:var(--fg-muted);">暂无粘贴回调记录 (在任意应用按 ⌘V 触发)</td></tr>`;
+    return;
+  }
+  list.slice(0, 20).forEach(rec => {
     const tr = document.createElement('tr');
+    const v = rec.variant ?? 'raw_passthrough';
+    const isSniffer = rec.serveKind === 'sniffer_probe';
+    const gen = rec.generation != null ? `G${rec.generation}` : 'G0';
     tr.innerHTML = `
-      <td>${rec.frontmostApp ?? '—'}</td>
-      <td><span class="pill">${rec.variant ?? '—'}</span></td>
-      <td>${rec.elapsedUs != null ? rec.elapsedUs + ' µs' : '—'}</td>`;
+      <td style="font-weight:600;color:#fff;">${rec.frontmostApp ?? '—'}</td>
+      <td><span class="pill-variant ${v}">${v}</span></td>
+      <td><span style="font-family:ui-monospace;color:var(--fg-muted);">${gen}</span></td>
+      <td><span class="pill-kind ${isSniffer ? 'sniffer' : 'real'}">${isSniffer ? '嗅探固化' : '真实消费'}</span></td>
+      <td style="text-align:right;"><span class="time-text">${rec.elapsedUs != null ? rec.elapsedUs + ' µs' : '—'}</span></td>`;
     body.appendChild(tr);
   });
 }
@@ -318,19 +882,24 @@ async function loadDiagnostics() {
 document.getElementById('export-report').addEventListener('click', async () => {
   const r = await (invoke ?? NOOP)('cmd_export_sanitized_report', { targetPath: '' })
     .catch(() => ({ savedPath: '(导出失败)' }));
-  alert('脱敏诊断包已导出至:\n' + (r?.savedPath ?? '(未知路径)'));
+  alert('✨ 脱敏诊断周报已导出至本地:\n' + (r?.savedPath ?? '(未知路径)'));
 });
 
 // —— Tab 3: 设置 ——
 const swA11y = document.getElementById('sw-a11y');
 swA11y.addEventListener('click', () => swA11y.classList.toggle('on'));
+
 document.getElementById('ollama-test').addEventListener('click', async () => {
   const el = document.getElementById('ollama-status');
-  el.textContent = '正在探测 Ollama …';
+  el.textContent = '⏳ 正在探测 Ollama 节点…';
   const r = await (invoke ?? NOOP)('cmd_probe_ollama', {
     baseUrl: document.getElementById('llm-base').value || 'http://127.0.0.1:11434',
   }).catch(() => null);
-  el.textContent = r?.ok ? `✅ Ollama 可达 · 模型 ${r.models?.length ?? 0} 个` : '❌ Ollama 未检测到（请确认已启动）';
+  if (r?.ok) {
+    el.innerHTML = `<span style="color:var(--mint);">✅ 成功连接 · 已发现 ${r.models?.length ?? 0} 个本地模型</span>`;
+  } else {
+    el.innerHTML = `<span style="color:var(--red);">❌ 无法连接到 Ollama (请检查 11434 端口)</span>`;
+  }
 });
 
 // —— llm_stream 安全审查弹窗 ——
@@ -348,7 +917,7 @@ document.getElementById('review-confirm').addEventListener('click', () => {
   window.dispatchEvent(new CustomEvent('pasteflow-recipe-review-result', { detail: { confirmed: true } }));
 });
 
-// —— 角色预设快捷栏 ——
+// —— 预设点击 ——
 document.querySelectorAll('.presets button').forEach(b => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.presets button').forEach(x => x.classList.remove('on'));

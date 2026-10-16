@@ -105,15 +105,30 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;
 
-            // 冒烟验证钩子 (仅 debug): PASTEFLOW_SMOKE=drawer 启动 1s 后自动展开抽屉
+            // 调试/冒烟启动钩子:
+            //   PASTEFLOW_SMOKE=drawer 或 --drawer: 自动展开抽屉
+            //   PASTEFLOW_SMOKE=dashboard 或 --dashboard / -d: 自动打开主面板
             #[cfg(debug_assertions)]
-            if std::env::var("PASTEFLOW_SMOKE").map(|v| v.contains("drawer")).unwrap_or(false) {
-                let h = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(1000));
-                    let hc = h.clone();
-                    let _ = h.run_on_main_thread(move || drawer_window::toggle(&hc));
-                });
+            {
+                let smoke = std::env::var("PASTEFLOW_SMOKE").unwrap_or_default();
+                let is_drawer = smoke.contains("drawer") || std::env::args().any(|a| a == "--drawer");
+                let is_dashboard = smoke.contains("dashboard") || std::env::args().any(|a| a == "--dashboard" || a == "-d");
+                if is_drawer {
+                    let h = app.handle().clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let hc = h.clone();
+                        let _ = h.run_on_main_thread(move || drawer_window::toggle(&hc));
+                    });
+                } else if is_dashboard {
+                    let h = app.handle().clone();
+                    let tracker = dashboard_tracker.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let hc = h.clone();
+                        let _ = h.run_on_main_thread(move || dashboard_window::open(&hc, &tracker));
+                    });
+                }
             }
 
             let enable = MenuItem::with_id(app, "enable", "启用 PasteFlow", true, None::<&str>)?;
@@ -131,6 +146,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             let state_for_menu = state_for_setup.clone();
             TrayIconBuilder::with_id("pasteflow-tray")
                 .tooltip("PasteFlow (灵贴)")
+                .title("✨ 灵贴")
+                .show_menu_on_left_click(true)
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
                     // P3-2: 「剪贴板历史」= 磁吸抽屉 (⌥⇧V 同义)；「诊断看板」= 主面板
@@ -184,7 +201,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             std::thread::spawn(move || {
                 let mut last_cc: i64 = current_change_count();
                 loop {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    std::thread::sleep(std::time::Duration::from_millis(25));
 
                     // P2-1: HUD 唤醒总线 drain (双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD)
                     let summons = state_tick.hud_summon.drain();
@@ -232,6 +249,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                         if recorded {
                             let ev = serde_json::json!({ "active": stack.lock().unwrap().is_active() });
                             let _ = handle_emit.emit_to("drawer", "pasteflow://stack-updated", ev);
+                            let _ = handle_emit.emit_to("drawer", "pasteflow://drawer-refresh", ());
+                            let _ = handle_emit.emit("pasteflow://history-updated", ());
                         }
                         let deps = paste_provider::ProviderDeps {
                             window_observer: state.window_observer.clone(),
