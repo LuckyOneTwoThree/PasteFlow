@@ -27,6 +27,10 @@ regex = "1.11"
 pulldown-cmark = { version = "0.12", default-features = false, features = ["html"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# P2-4 SQLite/FTS5 存储层 (v0.1.5 历史抽屉)
+# FTS5 由 libsqlite3-sys bundled 模式默认编译 (SQLITE_ENABLE_FTS5)
+rusqlite = { version = "0.40", features = ["bundled"] }
+uuid = { version = "1", features = ["v7"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

@@ -17,6 +17,8 @@ pub mod native_bridge;
 pub mod recipe;
 pub mod engine;
 pub mod paste_provider;
+pub mod storage;
+pub mod hud;
 
 use engine::EngineState;
 use menu_bar::MenuAction;

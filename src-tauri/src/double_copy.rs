@@ -2,7 +2,11 @@
 //!
 //! 双信号协同:
 //!   1. 260ms 消抖: 同一内容在 260ms 内二次 changeCount 事件 -> 合并为一次复制 (Toast 抑制)
-//!   2. 双击检测: 连续两次真实 ⌘C 且间隔 <250ms 且同一 L1 快照哈希 -> 触发双击还原/HUD
+//!   2. 双击检测: 连续两次真实 ⌘C 且间隔 <250ms 且同一 L1 快照哈希 -> 触发双击动作
+//!
+//! **v0.1.5 语义升级 (Dev Plan P2-3)**：双击不再「直接还原原文」，而是
+//! **Re-own + 唤醒 Micro-HUD**，由 HUD 按前台上下文推荐动作（`hud::recommend_actions`），
+//! 槽位 `0` 恒为「还原原文」（`builtin.restore-raw`）。
 //!
 //! 补挂屏蔽 (P0 exp5 / §1.4.2): Re-own 补挂产生的 changeCount 必须登记为
 //! InternalWrite 并被本模块短路, 否则会误判为外部双击复制。
@@ -21,7 +25,7 @@ pub enum CopyEventKind {
     Normal,
     /// 消抖命中: 260ms 内同内容重复事件, 合并 (不重复弹 Toast)
     Debounced,
-    /// 双击 ⌘C: 触发还原/HUD
+    /// 双击 ⌘C: v0.1.5 起触发 Re-own + 唤醒 Micro-HUD (不再直接还原原文)
     DoubleClick,
 }
 
