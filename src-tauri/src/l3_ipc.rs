@@ -248,7 +248,29 @@ pub fn cmd_probe_ollama(base_url: String) -> crate::l3::OllamaProbeResult {
     crate::l3::probe_ollama(&base_url)
 }
 
-/// 保存 BYOK 配置（主面板 Tab 3）
+/// 从磁盘加载持久化的 LLM 配置
+pub fn load_persisted_llm_config(dir: &std::path::Path) -> Option<LlmConfig> {
+    let path = dir.join("llm_config.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// 持久化 LLM 配置到本地磁盘
+pub fn save_persisted_llm_config(dir: &std::path::Path, cfg: &LlmConfig) -> std::io::Result<()> {
+    let path = dir.join("llm_config.json");
+    let content = serde_json::to_string_pretty(cfg)?;
+    std::fs::write(path, content)
+}
+
+/// 获取当前生效的 BYOK 配置（供主面板 Tab 3 打开时回显）
+#[tauri::command]
+pub fn cmd_get_llm_config(
+    l3: tauri::State<'_, std::sync::Arc<L3IpcState>>,
+) -> Option<LlmConfig> {
+    l3.runtime.config()
+}
+
+/// 保存 BYOK 配置（主面板 Tab 3）并持久化到本地
 #[tauri::command]
 pub fn cmd_set_llm_config(
     l3: tauri::State<'_, std::sync::Arc<L3IpcState>>,
@@ -256,13 +278,19 @@ pub fn cmd_set_llm_config(
     api_key: String,
     model: String,
 ) -> SetLlmConfigReturn {
-    l3.runtime.set_config(LlmConfig {
+    let cfg = LlmConfig {
         base_url,
         api_key,
         model,
-    });
+    };
+    let dir = crate::app_data_dir();
+    if let Err(e) = save_persisted_llm_config(&dir, &cfg) {
+        tracing::warn!(error = %e, "failed to persist llm config to disk");
+    }
+    l3.runtime.set_config(cfg);
     SetLlmConfigReturn { saved: true }
 }
+
 
 /// 一次性原子写入纯文本（TOCTOU: clearContents 后立即 setString；登记内部写入防误判）
 #[cfg(target_os = "macos")]
@@ -338,4 +366,20 @@ mod tests {
         assert!(first.is_some());
         assert!(st.completed.lock().unwrap().remove("s1").is_none());
     }
+
+    #[test]
+    fn persisted_llm_config_roundtrips() {
+        let temp = std::env::temp_dir().join(format!("pasteflow-test-cfg-{}", uuid::Uuid::now_v7()));
+        let _ = std::fs::create_dir_all(&temp);
+        let cfg = LlmConfig {
+            base_url: "http://127.0.0.1:11434/v1".into(),
+            api_key: "sk-test-12345".into(),
+            model: "qwen2.5:7b".into(),
+        };
+        assert!(save_persisted_llm_config(&temp, &cfg).is_ok());
+        let loaded = load_persisted_llm_config(&temp);
+        assert_eq!(loaded, Some(cfg));
+        let _ = std::fs::remove_dir_all(&temp);
+    }
 }
+

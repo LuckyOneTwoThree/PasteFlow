@@ -36,6 +36,10 @@ base64 = "0.22"
 time = { version = "0.3", features = ["formatting"] }
 # P3-1 L3 网络层: OpenAI 兼容 SSE 流式客户端 (BYOK + 本地 Ollama 探测)
 ureq = { version = "2.10", features = ["json"] }
+# 缺口1: 全局热键 (TDD §4.5: Carbon RegisterEventHotKey, 无需 TCC 权限)
+tauri-plugin-global-shortcut = "2"
+# 缺口2: Tier 1 enigo 按键注入 (⌘V 自动上屏, 需辅助功能权限)
+enigo = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
@@ -51,6 +55,8 @@ objc2-app-kit = { version = "0.2", features = [
     "NSApplication"
 ] }
 libc = "0.2"
+# 缺口2/5: AXUIElement 光标定位 (UI Spec §3.1 三级回退 Tier 1) + 权限探测
+core-foundation = "0.10"
 
 [dev-dependencies]
 serde_json = "1.0"

@@ -4,5 +4,6 @@
 //! DLP 高置信命中项由 PrivacyAndLoopGuard 拦截，**绝不**进入本层落表。
 
 pub mod db;
+pub mod metrics;
 
 pub use db::{make_item, ClipboardItem, GateSkipReason, HistoryDb, ServedLogEntry};

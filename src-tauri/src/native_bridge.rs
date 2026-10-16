@@ -154,7 +154,8 @@ mod tests {
         // 非 macOS 测试环境返回 false, macOS 测试返回 true (骨架)
         let _ = mb.assemble();
         let defs = mb.refresh();
-        assert_eq!(defs.len(), 10);
+        // 对齐托盘真实菜单 (9 项 = 6 实项 + 3 分隔), menu_bar.rs 单一真源
+        assert_eq!(defs.len(), 9);
     }
 
     #[test]

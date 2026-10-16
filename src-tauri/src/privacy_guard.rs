@@ -67,6 +67,20 @@ impl DlpDetector {
             DlpAction::Normal
         }
     }
+
+    /// 显式脱敏 (⌃⌥D, Master Spec §4.5 / UI Spec §2.3):
+    /// 将命中的密钥字面量替换为 `<REDACTED>`，返回 (脱敏后文本, 脱敏处数)。
+    /// 仅供**用户显式触发**的脱敏粘贴通道使用；D8 静默三不链路绝不调用（不篡改粘贴明文）。
+    pub fn redact(&self, text: &str) -> (String, usize) {
+        let mut out = text.to_string();
+        let mut hits = 0;
+        for re in &self.compiled {
+            let replaced = re.replace_all(&out, "<REDACTED>");
+            hits += re.find_iter(&out).count();
+            out = replaced.into_owned();
+        }
+        (out, hits)
+    }
 }
 
 // ——— 防死循环 Guard ———
@@ -160,6 +174,31 @@ mod tests {
     fn dlp_detects_openai_key() {
         let d = DlpDetector::new();
         assert_eq!(d.detect("token sk-abc123def456ghi789jkl012"), DlpAction::SilentGuard);
+    }
+
+    #[test]
+    fn redact_replaces_secrets_and_counts_hits() {
+        let d = DlpDetector::new();
+        let (out, hits) = d.redact("key sk-abc123def456ghi789jkl012 end");
+        assert!(out.contains("<REDACTED>"));
+        assert!(!out.contains("sk-abc123def456ghi789jkl012"));
+        assert_eq!(hits, 1);
+    }
+
+    #[test]
+    fn redact_multiple_secret_kinds_in_one_pass() {
+        let d = DlpDetector::new();
+        let (out, hits) = d.redact("a sk-abc123def456ghi789jkl012 b ghp_abcdefghij0123456789klmnopqrstuvwxyz c");
+        assert!(out.contains("a <REDACTED> b <REDACTED> c"));
+        assert_eq!(hits, 2);
+    }
+
+    #[test]
+    fn redact_clean_text_returns_unchanged() {
+        let d = DlpDetector::new();
+        let (out, hits) = d.redact("普通文本没有任何密钥。");
+        assert_eq!(out, "普通文本没有任何密钥。");
+        assert_eq!(hits, 0);
     }
 
     #[test]

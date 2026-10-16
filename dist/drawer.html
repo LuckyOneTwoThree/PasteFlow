@@ -489,8 +489,9 @@
 
 <script>
 // Tauri IPC: withGlobalTauri=true -> window.__TAURI__ (无打包器静态页面)
-const tauri = window.__TAURI__ ?? {};
-const { listen, invoke } = tauri.core ?? {};
+// Tauri 2 命名空间规则: invoke 在 core; listen/emit 在 event 上 (core.listen 不存在)
+const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
+const listen = window.__TAURI__?.event?.listen ?? window.__TAURI__?.core?.listen;
 const NOOP = () => Promise.resolve(null);
 
 // —— 状态 ——

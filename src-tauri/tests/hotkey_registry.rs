@@ -8,10 +8,34 @@
 
 use pasteflow_lib::double_copy::{CopyEventKind, DoubleCopyDetector};
 use pasteflow_lib::hotkeys::{
-    assert_no_conflicts, assert_unique, DOUBLE_CLICK_WINDOW_MS, HUD_CTRL_BRACKET, HUD_ESCAPE,
+    assert_activation_forbidden_free, assert_activation_unique, assert_no_conflicts, assert_unique,
+    ACTIVATION_HOTKEYS, DOUBLE_CLICK_WINDOW_MS, FORBIDDEN_HOTKEYS, HUD_CTRL_BRACKET, HUD_ESCAPE,
     KNOWN_SYSTEM_CONFLICTS, SLOT_HOTKEYS,
 };
 use std::time::Duration;
+
+// —— TDD §6.3: 5 个激活快捷键两两不等且不入禁用黑名单 ——
+
+#[test]
+fn activation_hotkeys_traverse_all_five() {
+    // TDD §6.3 原文: 遍历 hotkeys.rs 定义的全部 5 个激活快捷键
+    // (⌘⇧P / ⌃⌥V / ⌃⌥D / ⌥⇧V / ⌥⇧S), 断言任意两个键位组合两两不相等
+    assert_eq!(ACTIVATION_HOTKEYS.len(), 5);
+    assert!(assert_activation_unique());
+}
+
+#[test]
+fn activation_hotkeys_avoid_forbidden_blacklist() {
+    // TDD §6.3: 无任何键位落入 FORBIDDEN_HOTKEYS (⌥V / ⌘V⌘V)
+    assert!(!FORBIDDEN_HOTKEYS.is_empty());
+    assert!(assert_activation_forbidden_free());
+}
+
+#[test]
+fn activation_hotkeys_avoid_system_conflicts() {
+    let registered: Vec<String> = ACTIVATION_HOTKEYS.iter().map(|h| h.plugin.to_string()).collect();
+    assert!(assert_no_conflicts(&registered).is_empty());
+}
 
 // —— D4 双击 ⌘C 手势 ——
 

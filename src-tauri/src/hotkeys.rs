@@ -23,6 +23,45 @@ pub const SLOT_HOTKEYS: &[(&str, &str)] = &[
 /// 双击 ⌘C 手势检测窗口 (master spec §3.2)
 pub const DOUBLE_CLICK_WINDOW_MS: u64 = 250;
 
+// —— 缺口1: 全局激活热键登记表 (TDD §4.5 / Master Spec §4.5, 5 个) ——
+
+/// 激活热键登记表条目: (动作 ID, 显示符号, tauri-plugin-global-shortcut 串)
+pub struct ActivationHotkey {
+    pub id: &'static str,
+    pub display: &'static str,
+    /// tauri-plugin-global-shortcut 可解析的键位串 (如 "command+shift+p")
+    pub plugin: &'static str,
+}
+
+/// 5 个激活快捷键 (TDD §6.3 门禁要求两两不等且不入禁用黑名单):
+///   ⌘⇧P 自动挡暂停/恢复 | ⌃⌥V 手动挡备选热键 | ⌃⌥D 显式 DLP 脱敏
+///   ⌥⇧V 历史与贪吃蛇抽屉 | ⌥⇧S 贪吃蛇模式开关
+pub const ACTIVATION_HOTKEYS: &[ActivationHotkey] = &[
+    ActivationHotkey { id: "autopilot_pause", display: "⌘⇧P", plugin: "command+shift+p" },
+    ActivationHotkey { id: "manual_summon", display: "⌃⌥V", plugin: "ctrl+alt+v" },
+    ActivationHotkey { id: "dlp_redact", display: "⌃⌥D", plugin: "ctrl+alt+d" },
+    ActivationHotkey { id: "drawer_history", display: "⌥⇧V", plugin: "shift+alt+v" },
+    ActivationHotkey { id: "stack_mode", display: "⌥⇧S", plugin: "shift+alt+s" },
+];
+
+/// 禁用黑名单 (TDD §6.3): 与原生粘贴冲突 (⌥V=√ 字符) / 与 ⌘C⌘C 手势混淆
+pub const FORBIDDEN_HOTKEYS: &[&str] = &["⌥V", "⌘V⌘V"];
+
+/// 5 个激活热键两两不等 (TDD §6.3 门禁)
+pub fn assert_activation_unique() -> bool {
+    let mut seen = HashSet::new();
+    ACTIVATION_HOTKEYS
+        .iter()
+        .all(|h| seen.insert(h.plugin) && seen.insert(h.display))
+}
+
+/// 激活热键无一落入禁用黑名单 (TDD §6.3 门禁)
+pub fn assert_activation_forbidden_free() -> bool {
+    ACTIVATION_HOTKEYS
+        .iter()
+        .all(|h| !FORBIDDEN_HOTKEYS.contains(&h.display) && !FORBIDDEN_HOTKEYS.contains(&h.plugin))
+}
+
 /// 已知系统热键冲突 (Stage Manager / 输入法 / 全屏快捷键)
 pub const KNOWN_SYSTEM_CONFLICTS: &[&str] = &[
     "Ctrl+Up",     // Mission Control (macOS)
@@ -81,5 +120,24 @@ mod tests {
     #[test]
     fn slot_hotkeys_count() {
         assert_eq!(SLOT_HOTKEYS.len(), 4);
+    }
+
+    #[test]
+    fn activation_hotkeys_are_five_and_unique() {
+        // TDD §6.3: 遍历全部 5 个激活快捷键 (⌘⇧P / ⌃⌥V / ⌃⌥D / ⌥⇧V / ⌥⇧S)
+        assert_eq!(ACTIVATION_HOTKEYS.len(), 5);
+        assert!(assert_activation_unique());
+    }
+
+    #[test]
+    fn activation_hotkeys_avoid_forbidden_blacklist() {
+        // TDD §6.3: 无键位落入禁用黑名单 (⌥V / ⌘V⌘V)
+        assert!(assert_activation_forbidden_free());
+    }
+
+    #[test]
+    fn activation_hotkeys_match_master_spec_symbols() {
+        let displays: Vec<&str> = ACTIVATION_HOTKEYS.iter().map(|h| h.display).collect();
+        assert_eq!(displays, vec!["⌘⇧P", "⌃⌥V", "⌃⌥D", "⌥⇧V", "⌥⇧S"]);
     }
 }

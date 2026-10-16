@@ -42,7 +42,7 @@ pub struct ConsumeResult {
     pub consumed_count: usize,
     /// 合并后的文本 (JOIN_NEWLINE / DEDUP_NUMBERED); L3 模式为 None
     pub merged_text: Option<String>,
-    /// L3 流式会话 id (P3 预留)
+    /// L3 流式会话 id (由命令层 `l3_ipc::spawn_l3_stream` 返回, core 层恒为 None)
     pub stream_id: Option<String>,
 }
 
@@ -135,14 +135,14 @@ impl StackQueue {
                     stream_id: None,
                 }
             }
-            ConsumeMode::L3AiSummary => {
-                // P3 预留: 流式聚合不在此同步执行, 队列保持
-                ConsumeResult {
-                    consumed_count: 0,
-                    merged_text: None,
-                    stream_id: Some("p3-pending".into()),
-                }
-            }
+            // L3 流式聚合由命令层执行并返回真实 streamId (见 ipc.rs `cmd_consume_stack_queue`
+            // -> `l3_ipc::spawn_l3_stream`); core 层此分支仅表达「队列保持不清空」语义,
+            // 不产生占位 streamId
+            ConsumeMode::L3AiSummary => ConsumeResult {
+                consumed_count: 0,
+                merged_text: None,
+                stream_id: None,
+            },
         }
     }
 }
@@ -248,14 +248,16 @@ mod tests {
     }
 
     #[test]
-    fn consume_l3_is_reserved_and_keeps_queue() {
+    fn consume_l3_keeps_queue_and_returns_no_stream_id() {
         let mut q = StackQueue::new();
         q.set_active(true);
         q.push(entry("1", "keep"));
         let r = q.consume(ConsumeMode::L3AiSummary, Some(SummaryPromptType::MeetingNotes));
+        // L3 流式聚合由命令层执行; core 层「不消费」: 无 merged_text / streamId, 队列保持
         assert_eq!(r.consumed_count, 0);
-        assert!(r.stream_id.is_some());
-        assert_eq!(q.len(), 1); // P3 流式消费, 队列保持
+        assert_eq!(r.merged_text, None);
+        assert_eq!(r.stream_id, None);
+        assert_eq!(q.len(), 1); // 队列保持不变
     }
 
     #[test]

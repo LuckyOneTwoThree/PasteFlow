@@ -266,8 +266,11 @@
 
 <script type="module">
 // Tauri IPC: withGlobalTauri=true -> window.__TAURI__ (无打包器静态页面)
-const tauri = window.__TAURI__ ?? {};
-const { listen, invoke } = tauri.core ?? {};
+// Tauri 2 命名空间规则: invoke 在 core; listen/emit 在 event 上 (core.listen 不存在,
+// 旧写法 `tauri.core.listen` 会让事件订阅静默失效)
+const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
+const listen = window.__TAURI__?.event?.listen ?? window.__TAURI__?.core?.listen;
+// 浏览器冒烟兜底: Tauri API 未注入时 listen/invoke 降级为 no-op
 const NOOP = async () => {};
 
 const panel = document.getElementById('panel');
@@ -279,6 +282,9 @@ const l3Body = document.getElementById('l3-body');
 let actions = [];   // HudActionOptionDto[]
 let highlight = 0;  // 默认高亮第 1 项 (UI Spec §3.2)
 let sourceText = ''; // 当前复制原文 (L3 输入源)
+let frontmostBundle = ''; // 前台应用 bundle id (hud-summoned 载荷, 供 cmd_hud_trigger 回传)
+let windowContext = '';   // 宿主窗口上下文 (hud-summoned 载荷, 回传给 cmd_hud_trigger)
+let tier1Preferred = false; // Tier 1 偏好 (cmd_tier1_status.injectEnabled)
 let l3State = 'idle'; // idle | streaming | done
 let l3StreamId = null;
 
@@ -300,6 +306,10 @@ function render() {
 
 function show() {
   panel.classList.remove('ready', 'streaming', 'l3-done');
+  // 清除 Tier 1 淡出遗留的内联样式, 避免下次唤醒面板不可见
+  panel.style.transition = '';
+  panel.style.transform = '';
+  panel.style.opacity = '';
   panel.classList.add('visible');
   l3State = 'idle';
   highlight = 0;
@@ -310,13 +320,33 @@ function hide() {
   panel.classList.remove('visible', 'ready', 'streaming', 'l3-done');
   l3State = 'idle';
   // 托盘宿主窗口隐藏但常驻 (IPC Spec §1: micro-hud 常驻不销毁)
+  // invoke 参数键规则: cmd_hud_visible(visible: bool) -> { visible }
   invoke?.('cmd_hud_visible', { visible: false }).catch(() => {});
+}
+
+// Tier 1 上屏/注入反馈: 面板 80ms 内缩小淡出 (UI Spec §3.2), 不停留「请按 ⌘V」胶囊
+function fadeOutTier1(text) {
+  if (text) {
+    panel.classList.add('ready');
+    document.getElementById('ready-text').textContent = text;
+  }
+  panel.style.transition = 'transform 80ms ease-in, opacity 80ms ease-in';
+  panel.style.transform = 'scale(0.9)';
+  panel.style.opacity = '0';
+  setTimeout(() => {
+    // 淡出结束收尾: 隐藏面板并通知宿主窗口 (hide 内含 cmd_hud_visible { visible: false })
+    panel.style.transition = '';
+    panel.style.transform = '';
+    panel.style.opacity = '';
+    hide();
+  }, 80);
 }
 
 // —— P3-1: L3 流式动作 (UI Spec §3.3 展开态) ——
 
 function l3PromptTypeFor(slotKey) {
   const a = actions.find(x => x.slotKey === slotKey);
+  // PromptType 为 SCREAMING_SNAKE_CASE 枚举 (l3.rs `PromptType`)
   const m = {
     'builtin.l3-polite-tone': 'POLITE_TONE',
     'builtin.l3-meeting-notes': 'MEETING_NOTES',
@@ -335,11 +365,13 @@ async function startL3(slotKey) {
   panel.classList.remove('ready', 'l3-done');
   panel.classList.add('streaming');
   try {
+    // invoke 参数键规则: cmd_run_l3_stream(promptType: PromptType, sourceText: String)
+    // -> 平铺 { promptType, sourceText } (参数名 camelCase, 无 args 包装)
     const r = await invoke('cmd_run_l3_stream', {
       promptType: l3PromptTypeFor(slotKey),
       sourceText,
     });
-    l3StreamId = r?.streamId ?? null;
+    l3StreamId = r?.streamId ?? null; // RunL3Return.streamId (serde rename "streamId")
   } catch (e) {
     l3Status.classList.remove('streaming');
     l3Status.textContent = '❌ ' + (e?.message ?? e?.code ?? 'L3 启动失败');
@@ -348,6 +380,7 @@ async function startL3(slotKey) {
 
 function cancelL3() {
   if (l3StreamId && l3State === 'streaming') {
+    // cmd_cancel_l3_stream(stream_id: String) -> { streamId }
     invoke?.('cmd_cancel_l3_stream', { streamId: l3StreamId }).catch(() => {});
   }
   hide();
@@ -355,9 +388,16 @@ function cancelL3() {
 
 function commitL3() {
   if (!l3StreamId) return;
+  // cmd_l3_commit_paste(stream_id: String) -> { mode, tier1 }
   invoke?.('cmd_l3_commit_paste', { streamId: l3StreamId })
-    .then(() => {
+    .then((r) => {
       panel.classList.remove('streaming', 'l3-done');
+      // Tier 0/1 分流 (UI Spec §3.2): tier1=true 自动注入已完成 → 80ms 淡出 + 「已注入」
+      if (r?.tier1) {
+        fadeOutTier1('✅ 已注入');
+        return;
+      }
+      // Tier 0: 绿色确认胶囊停留 600ms
       panel.classList.add('ready');
       document.getElementById('ready-text').textContent = '✨ 已准备就绪 · 请按 ⌘V 粘贴';
       setTimeout(hide, 600);
@@ -395,9 +435,34 @@ function triggerSlot(slotKey) {
     startL3(slotKey);
     return;
   }
-  invoke?.('cmd_hud_trigger', { slotKey }).catch(() => {});
+  runHudTrigger(slotKey);
+}
+
+// 触发动作槽 + Tier 0/1 上屏分流 (UI Spec §3.2)
+async function runHudTrigger(slotKey) {
+  let r = null;
+  try {
+    // invoke 参数键规则: cmd_hud_trigger(args: HudTriggerDto) -> { args: {...} }
+    // HudTriggerDto (camelCase): slotKeys / windowContext / frontmostBundle / tier1
+    r = await invoke('cmd_hud_trigger', {
+      args: {
+        slotKeys: [slotKey],
+        windowContext,
+        frontmostBundle,
+        tier1: tier1Preferred,
+      },
+    });
+  } catch (e) {
+    r = null; // 后端异常按 Tier 0 兜底提示
+  }
   if (slotKey === '0' || slotKey === 'Backspace') {
     panel.classList.remove('visible', 'ready');
+    return;
+  }
+  // 返回 Result<{ ok, tier1, textLen }, String> (camelCase) — 按 tier1 分流
+  if (r?.tier1) {
+    // Tier 1 (自动注入 ⌘V 已完成): 不显示「请按 ⌘V」胶囊, 80ms 内缩小淡出收尾
+    fadeOutTier1(null);
     return;
   }
   // Tier 0 上屏反馈: 绿色确认胶囊 600ms (UI Spec §3.2)

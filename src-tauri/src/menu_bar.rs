@@ -4,14 +4,16 @@
 //!   [菜单栏图标 (拼贴板样式)]
 //!   ├─ ✅ 启用 PasteFlow          (开关, NSMenuItem.state)
 //!   ├─ ────────────────────
-//!   ├─ 📋 剪贴板历史             (P2 抽屉, v0.1.5)
-//!   ├─ 🔍 Markdown → 富文本      (L1 杀手滤镜 A, 已启用)
-//!   ├─ 🧹 社媒链接净化            (L1 杀手滤镜 B, 已启用)
+//!   ├─  Markdown → 富文本      (L1 杀手滤镜 A)
+//!   ├─ 🧹 社媒链接净化            (L1 杀手滤镜 B)
 //!   ├─ ────────────────────
-//!   ├─ ⚙️ 偏好设置…              (P2 主面板, v0.1.5)
-//!   ├─ 📊 诊断看板               (P2 主面板, v0.1.5)
+//!   ├─ 📋 打开剪贴板历史          (历史窗口)
+//!   ├─ 📊 诊断看板               (诊断窗口)
 //!   ├─ ────────────────────
 //!   └─ 🚪 退出 PasteFlow
+//!
+//! `menu_definition()` 是菜单结构的唯一真源 (IPC Spec §3.1 MenuBar Menu Definition),
+//! 托盘装配与 IPC 层均以此模型为准, 避免两套菜单模型漂移。
 //!
 //! 状态机 (纯逻辑, UI 层装配调用):
 //!   启用开关 -> materializer.run_lifecycle(Quit/Pause) 物化接管后停止轮询
@@ -130,7 +132,10 @@ impl MenuBarController {
         }
     }
 
-    /// 生成当前菜单定义 (UI 层渲染 NSMenu)
+    /// 生成当前菜单定义 (UI 层渲染 NSMenu, IPC Spec §3.1 MenuBar Menu Definition)
+    ///
+    /// 9 项: 启用 + 分隔 + 2 滤镜 + 分隔 + 历史 + 诊断 + 分隔 + 退出, 全部启用。
+    /// `Preferences` 暂不出现 (预留未来设置页)。
     pub fn menu_definition(&self) -> Vec<MenuItemDef> {
         let s = self.state.lock();
         vec![
@@ -154,9 +159,8 @@ impl MenuBarController {
                 if s.filter_social_link { MenuState::On } else { MenuState::Off },
             ),
             MenuItemDef::separator(),
-            MenuItemDef::item(MenuItemId::History, "剪贴板历史", false, MenuState::Off),
-            MenuItemDef::item(MenuItemId::Preferences, "偏好设置…", false, MenuState::Off),
-            MenuItemDef::item(MenuItemId::Diagnostics, "诊断看板", false, MenuState::Off),
+            MenuItemDef::item(MenuItemId::History, "打开剪贴板历史", true, MenuState::Off),
+            MenuItemDef::item(MenuItemId::Diagnostics, "诊断看板", true, MenuState::Off),
             MenuItemDef::separator(),
             MenuItemDef::item(MenuItemId::Quit, "退出 PasteFlow", true, MenuState::Off),
         ]
@@ -183,7 +187,10 @@ impl MenuBarController {
                 s.enabled = false;
                 true // 触发生命周期物化
             }
-            _ => false, // P2 动作暂不处理
+            // 打开窗口类动作: 仅物化/展示目标窗口, 不触发生命周期物化
+            MenuAction::OpenHistory | MenuAction::OpenPreferences | MenuAction::OpenDiagnostics => {
+                false
+            }
         }
     }
 
@@ -213,18 +220,24 @@ mod tests {
     fn menu_definition_matches_ipc_spec() {
         let m = MenuBarController::new();
         let defs = m.menu_definition();
-        // 10 项: 启用 + 分隔 + 2滤镜 + 分隔 + 3占位 + 分隔 + 退出
-        assert_eq!(defs.len(), 10);
+        // 9 项: 启用 + 分隔 + 2滤镜 + 分隔 + 历史 + 诊断 + 分隔 + 退出
+        assert_eq!(defs.len(), 9);
         assert_eq!(defs[0].id, MenuItemId::EnableToggle);
         assert_eq!(defs[0].state, MenuState::On); // 默认启用
         assert!(defs[1].is_separator);
         assert_eq!(defs[2].id, MenuItemId::FilterMarkdown);
         assert_eq!(defs[3].id, MenuItemId::FilterSocialLink);
-        // P2 菜单项禁用
-        assert!(!defs[5].enabled); // History
-        assert!(!defs[6].enabled); // Preferences
-        assert!(!defs[7].enabled); // Diagnostics
-        assert_eq!(defs[9].id, MenuItemId::Quit);
+        assert!(defs[4].is_separator);
+        assert_eq!(defs[5].id, MenuItemId::History);
+        assert_eq!(defs[6].id, MenuItemId::Diagnostics);
+        assert!(defs[7].is_separator);
+        assert_eq!(defs[8].id, MenuItemId::Quit);
+        // 全部启用 (与托盘菜单一致)
+        for d in &defs {
+            if !d.is_separator {
+                assert!(d.enabled, "{:?} 应为启用", d.id);
+            }
+        }
     }
 
     #[test]

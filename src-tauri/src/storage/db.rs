@@ -164,6 +164,11 @@ impl HistoryDb {
         Self::from_connection(Connection::open_in_memory()?)
     }
 
+    /// 底层连接 (供 `metrics` 等聚合查询复用)
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.conn
+    }
+
     /// 插入历史条目 (DLP 命中项由调用方拦截, 不得入表)
     pub fn insert_item(&self, item: &ClipboardItem) -> rusqlite::Result<()> {
         self.conn.execute(

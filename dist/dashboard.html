@@ -697,6 +697,9 @@
           <label style="width:auto;">自动注入 ⌘V (无需手动按键)</label>
           <button class="switch" id="sw-a11y"></button>
         </div>
+        <div id="a11y-status-desc" style="font-size:12px; margin-top:8px; color:var(--fg-secondary);">
+          <span>正在检查辅助功能权限…</span>
+        </div>
         <div class="risk-banner">
           <span>⚠️</span>
           <span>不授权此项时，PasteFlow 依然 100% 完整可用，动作执行后将写入剪贴板并提示「已就绪，请按 ⌘V」。</span>
@@ -720,11 +723,15 @@
           <input id="llm-model" placeholder="qwen2.5:7b / gpt-4o-mini" />
         </div>
 
-        <div style="display:flex; align-items:center; gap:12px; margin-top:14px;">
+        <div style="display:flex; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap;">
+          <button class="btn" id="llm-save">
+            <span>💾 保存 AI 配置</span>
+          </button>
           <button class="btn ghost" id="ollama-test">
             <span>⚡ 探测本地 Ollama 连接</span>
           </button>
           <div id="ollama-status" style="font-size:12px; color:var(--fg-secondary);"></div>
+          <div id="llm-save-status" style="font-size:12px; color:var(--mint); font-weight:500;"></div>
         </div>
       </div>
     </section>
@@ -747,8 +754,7 @@
   </div>
 
 <script type="module">
-const tauri = window.__TAURI__ ?? {};
-const { invoke } = tauri.core ?? {};
+const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
 const NOOP = async () => {};
 
 // —— Tab 切换 ——
@@ -761,6 +767,7 @@ document.querySelectorAll('nav button[data-tab]').forEach(btn => {
       if (section) section.hidden = (id !== btn.dataset.tab);
     }
     if (btn.dataset.tab === 'diag') loadDiagnostics();
+    if (btn.dataset.tab === 'settings') loadSettings();
   });
 });
 
@@ -892,7 +899,66 @@ document.getElementById('export-report').addEventListener('click', async () => {
 
 // —— Tab 3: 设置 ——
 const swA11y = document.getElementById('sw-a11y');
-swA11y.addEventListener('click', () => swA11y.classList.toggle('on'));
+const a11yDesc = document.getElementById('a11y-status-desc');
+
+async function loadSettings() {
+  // 1. Tier 1 权限状态与开关回显
+  try {
+    const status = await (invoke ?? NOOP)('cmd_tier1_status');
+    if (status) {
+      swA11y.classList.toggle('on', !!status.injectEnabled);
+      if (status.accessibilityTrusted) {
+        a11yDesc.innerHTML = '<span style="color:var(--mint);">✅ 系统辅助功能权限已授予</span>';
+      } else {
+        a11yDesc.innerHTML = '<span style="color:#f59e0b;">⚠️ 系统尚未授予辅助功能权限 · </span><a href="javascript:void(0)" id="btn-open-privacy" style="color:var(--accent); text-decoration:underline;">打开系统隐私设置</a>';
+        document.getElementById('btn-open-privacy')?.addEventListener('click', () => {
+          (invoke ?? NOOP)('cmd_open_privacy_settings').catch(() => {});
+        });
+      }
+    }
+  } catch (_) {}
+
+  // 2. L3 BYOK 配置回显
+  try {
+    const cfg = await (invoke ?? NOOP)('cmd_get_llm_config');
+    if (cfg) {
+      if (cfg.baseUrl) document.getElementById('llm-base').value = cfg.baseUrl;
+      if (cfg.apiKey) document.getElementById('llm-key').value = cfg.apiKey;
+      if (cfg.model) document.getElementById('llm-model').value = cfg.model;
+    }
+  } catch (_) {}
+}
+
+swA11y.addEventListener('click', async () => {
+  const next = !swA11y.classList.contains('on');
+  swA11y.classList.toggle('on', next);
+  try {
+    const status = await (invoke ?? NOOP)('cmd_set_inject_enabled', { args: { enabled: next } });
+    if (status) {
+      swA11y.classList.toggle('on', !!status.injectEnabled);
+    }
+  } catch (e) {
+    swA11y.classList.toggle('on', !next);
+  }
+});
+
+document.getElementById('llm-save').addEventListener('click', async () => {
+  const baseUrl = document.getElementById('llm-base').value.trim();
+  const apiKey = document.getElementById('llm-key').value.trim();
+  const model = document.getElementById('llm-model').value.trim();
+  const statusEl = document.getElementById('llm-save-status');
+  try {
+    const r = await (invoke ?? NOOP)('cmd_set_llm_config', { baseUrl, apiKey, model });
+    if (r?.saved) {
+      statusEl.textContent = '✅ 配置已保存到本地';
+      setTimeout(() => { statusEl.textContent = ''; }, 3000);
+    }
+  } catch (e) {
+    statusEl.style.color = 'var(--red)';
+    statusEl.textContent = '❌ 保存失败: ' + (e?.message || e);
+    setTimeout(() => { statusEl.textContent = ''; statusEl.style.color = 'var(--mint)'; }, 4000);
+  }
+});
 
 document.getElementById('ollama-test').addEventListener('click', async () => {
   const el = document.getElementById('ollama-status');
@@ -931,6 +997,7 @@ document.querySelectorAll('.presets button').forEach(b => {
 });
 
 loadRecipes();
+loadSettings();
 </script>
 </body>
 </html>
