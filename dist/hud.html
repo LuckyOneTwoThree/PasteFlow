@@ -1,0 +1,184 @@
+<!doctype html>
+<!--
+  PasteFlow Micro-HUD (UI Spec v1.0 §3 / IPC Spec v1.0 `/#/hud`)
+  零依赖原生 HTML/CSS/JS 页面，由 micro-hud WebviewWindow 常驻隐藏加载。
+  按键: 1–4 触发动作槽 / 0·Backspace 还原原文 / ↑↓·Tab 循环高亮 /
+        Enter 执行高亮行 / Esc 隐藏 (自动挡不变)。按键绝不泄漏进宿主应用。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PasteFlow Micro-HUD</title>
+<style>
+  :root {
+    --hud-bg: rgba(28, 28, 30, 0.94);
+    --hud-fg: #f5f5f7;
+    --hud-muted: #98989f;
+    --hud-accent: #0a84ff;
+    --hud-ready: #30d158;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    background: transparent;
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    -webkit-user-select: none; user-select: none;
+    overflow: hidden;
+  }
+  #panel {
+    position: absolute; inset: 8px;
+    background: var(--hud-bg);
+    color: var(--hud-fg);
+    border-radius: 16px;
+    border: 1px solid rgba(255,255,255,0.12);
+    box-shadow: 0 16px 48px rgba(0,0,0,0.35);
+    padding: 12px 14px;
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #panel.visible { display: flex; }
+  #panel.ready { outline: 2px solid var(--hud-ready); }
+  .header {
+    font-size: 11px; letter-spacing: 0.4px;
+    color: var(--hud-muted);
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0 4px 4px;
+  }
+  .slot {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 120ms ease;
+  }
+  .slot .key {
+    width: 22px; height: 22px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.12);
+    border-radius: 6px;
+    font-size: 12px; font-weight: 600;
+    color: var(--hud-fg);
+  }
+  .slot .label { flex: 1; }
+  .slot .shortcut { font-size: 11px; color: var(--hud-muted); }
+  .slot.highlighted { background: var(--hud-accent); }
+  .slot.highlighted .key { background: rgba(255,255,255,0.22); }
+  .slot.highlighted .shortcut { color: rgba(255,255,255,0.85); }
+  #ready-text {
+    display: none;
+    font-size: 13px; font-weight: 600;
+    color: var(--hud-ready);
+    text-align: center; padding: 12px;
+  }
+  #panel.ready #ready-text { display: block; }
+  #panel.ready .header, #panel.ready .slot { display: none; }
+</style>
+</head>
+<body>
+  <div id="panel" role="dialog" aria-label="PasteFlow Micro-HUD">
+    <div class="header">
+      <span>PasteFlow · 选择格式动作</span>
+      <span id="target-app"></span>
+    </div>
+    <div id="slots"></div>
+    <div id="ready-text">已准备就绪，请按 ⌘V</div>
+  </div>
+
+<script type="module">
+// Tauri IPC: withGlobalTauri=true -> window.__TAURI__ (无打包器静态页面)
+const tauri = window.__TAURI__ ?? {};
+const { listen, invoke } = tauri.core ?? {};
+const NOOP = async () => {};
+
+const panel = document.getElementById('panel');
+const slotsEl = document.getElementById('slots');
+const targetApp = document.getElementById('target-app');
+
+let actions = [];   // HudActionOptionDto[]
+let highlight = 0;  // 默认高亮第 1 项 (UI Spec §3.2)
+
+function render() {
+  slotsEl.innerHTML = '';
+  actions.forEach((a, i) => {
+    const row = document.createElement('div');
+    row.className = 'slot' + (i === highlight ? ' highlighted' : '');
+    row.innerHTML =
+      `<span class="key">${a.slotKey}</span>` +
+      `<span class="label"></span>` +
+      `<span class="shortcut">${a.shortcutHint ?? ''}</span>`;
+    row.querySelector('.label').textContent = a.displayName;
+    row.addEventListener('click', () => triggerSlot(a.slotKey));
+    slotsEl.appendChild(row);
+  });
+}
+
+function show() {
+  panel.classList.remove('ready');
+  panel.classList.add('visible');
+  highlight = 0;
+  render();
+}
+
+function hide() {
+  panel.classList.remove('visible', 'ready');
+  // 托盘宿主窗口隐藏但常驻 (IPC Spec §1: micro-hud 常驻不销毁)
+  invoke?.('cmd_hud_visible', { visible: false }).catch(() => {});
+}
+
+function triggerSlot(slotKey) {
+  invoke?.('cmd_hud_trigger', { slotKey }).catch(() => {});
+  if (slotKey === '0' || slotKey === 'Backspace') {
+    panel.classList.remove('visible', 'ready');
+    return;
+  }
+  // Tier 0 上屏反馈: 绿色确认胶囊 600ms (UI Spec §3.2)
+  panel.classList.add('ready');
+  document.getElementById('ready-text').textContent = '已准备就绪，请按 ⌘V';
+  setTimeout(hide, 600);
+}
+
+// 按键拦截: 绝不泄漏进宿主应用 (preventDefault + stopPropagation)
+window.addEventListener('keydown', (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const map = { '1': '1', '2': '2', '3': '3', '4': '4', '0': '0', 'Backspace': 'Backspace' };
+  switch (e.key) {
+    case 'ArrowUp':
+      highlight = (highlight - 1 + Math.max(actions.length, 1)) % Math.max(actions.length, 1);
+      render();
+      break;
+    case 'ArrowDown':
+    case 'Tab':
+      highlight = (highlight + 1) % Math.max(actions.length, 1);
+      render();
+      break;
+    case 'Enter':
+      triggerSlot(actions[highlight]?.slotKey ?? '0');
+      break;
+    case 'Escape':
+      hide(); // 自动挡接管状态不变 (UI Spec §3.2)
+      break;
+    default:
+      if (map[e.key]) triggerSlot(map[e.key]);
+  }
+}, true);
+
+// 事件接收 (IPC Spec §4 `pasteflow://hud-summoned`)
+(listen ?? NOOP)('pasteflow://hud-summoned', (ev) => {
+  const p = ev.payload ?? {};
+  actions = (p.actions ?? []).map(a => ({
+    slotKey: a.slot_key ?? a.slotKey,
+    displayName: a.display_name ?? a.displayName,
+    pipeId: a.pipe_id ?? a.pipeId,
+    shortcutHint: a.shortcut_hint ?? a.shortcutHint,
+  }));
+  targetApp.textContent = p.frontmost_bundle ?? '';
+  show();
+  (invoke ?? NOOP)('cmd_hud_visible', { visible: true });
+}).catch(() => {});
+</script>
+</body>
+</html>

@@ -65,6 +65,8 @@ pub enum MaterializeReason {
     HotkeyDisabled,
     /// 用户切换接管开关
     ToggleOff,
+    /// P2-1 HUD 槽位 0: 还原原文 (builtin.restore-raw)
+    RestoreRaw,
 }
 
 /// 物化状态机 (单线程主线程执行)

@@ -24,6 +24,7 @@ pub mod drawer;
 pub mod stack;
 pub mod recipe_import;
 pub mod ipc;
+pub mod hud_window;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 
@@ -59,6 +60,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
     let state_for_setup = state.clone();
     builder
         .manage(ipc_state)
+        .manage(state.clone())
         .invoke_handler(tauri::generate_handler![
             ipc::cmd_search_history,
             ipc::cmd_toggle_pin_item,
@@ -66,6 +68,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             ipc::cmd_consume_stack_queue,
             ipc::cmd_import_pipe_recipe,
             ipc::cmd_list_pipe_recipes,
+            cmd_hud_visible,
+            cmd_hud_trigger,
         ])
         .setup(move |app| {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -118,6 +122,18 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                 let mut last_cc: i64 = current_change_count();
                 loop {
                     std::thread::sleep(std::time::Duration::from_millis(50));
+
+                    // P2-1: HUD 唤醒总线 drain (双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD)
+                    let summons = state_tick.hud_summon.drain();
+                    if !summons.is_empty() {
+                        let handle_summon = handle_tick.clone();
+                        let _ = handle_tick.run_on_main_thread(move || {
+                            for payload in &summons {
+                                hud_window::broadcast_summon(&handle_summon, payload);
+                            }
+                        });
+                    }
+
                     let cc = current_change_count();
                     if cc == last_cc {
                         continue;
@@ -157,6 +173,9 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                     });
                 }
             });
+
+            // P2-1: 2s 后预热常驻隐藏 micro-hud (IPC Spec §1)
+            hud_window::preheat(app.handle().clone());
 
             Ok(())
         })
@@ -242,4 +261,47 @@ fn clipboard_plain_text() -> String {
 #[cfg(not(target_os = "macos"))]
 fn clipboard_plain_text() -> String {
     String::new()
+}
+
+// —— P2-1 HUD 命令 (IPC Spec §3) ——
+
+#[derive(serde::Deserialize)]
+struct HudVisibleArgs {
+    visible: bool,
+}
+
+#[tauri::command]
+fn cmd_hud_visible(state: tauri::State<'_, Arc<engine::EngineState>>, args: HudVisibleArgs) {
+    state.hud_visibility.set_visible(args.visible);
+}
+
+#[derive(serde::Deserialize)]
+struct HudTriggerArgs {
+    #[serde(rename = "slotKey")]
+    slot_key: String,
+}
+
+/// HUD 槽位动作触发 (UI Spec §3.2: 1–4 选中 / 0·Backspace 还原原文)
+#[tauri::command]
+fn cmd_hud_trigger(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<engine::EngineState>>,
+    args: HudTriggerArgs,
+) {
+    hud_window::hide(&app);
+    state.hud_visibility.set_visible(false);
+    match args.slot_key.as_str() {
+        // 槽位 0: 还原原文 (builtin.restore-raw) — R4 主线程物化原始文本
+        "0" | "Backspace" => {
+            use crate::materializer::MaterializeReason;
+            let engine = state.inner();
+            let mut native = engine::setup_native(engine);
+            engine.lifecycle_materialize(MaterializeReason::RestoreRaw, &mut native);
+        }
+        // 槽位 1–4: 动作上屏 (Tier 0 自动挡已接管, 由消费方 ⌘V)
+        "1" | "2" | "3" | "4" => {
+            tracing::info!(slot = %args.slot_key, "hud slot triggered (tier0 ready to paste)");
+        }
+        _ => {}
+    }
 }

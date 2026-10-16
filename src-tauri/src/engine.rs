@@ -43,6 +43,8 @@ pub struct EngineState {
     pub dlp: Arc<DlpDetector>,
     /// P2-1: HUD 唤醒总线 (双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD)
     pub hud_summon: Arc<crate::hud::HudSummonBus>,
+    /// P2-1: HUD 可见状态跟踪
+    pub hud_visibility: Arc<crate::hud_window::HudVisibilityTracker>,
 }
 
 impl EngineState {
@@ -63,6 +65,7 @@ impl EngineState {
             recipes,
             dlp,
             hud_summon: Arc::new(crate::hud::HudSummonBus::new()),
+            hud_visibility: Arc::new(crate::hud_window::HudVisibilityTracker::new()),
         }
     }
 
