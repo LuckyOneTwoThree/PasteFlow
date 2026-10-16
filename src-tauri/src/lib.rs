@@ -144,9 +144,13 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
 
             let handle = app.handle().clone();
             let state_for_menu = state_for_setup.clone();
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))
+                .unwrap_or_else(|_| tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")).unwrap());
+
             TrayIconBuilder::with_id("pasteflow-tray")
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .tooltip("PasteFlow (灵贴)")
-                .title("✨ 灵贴")
                 .show_menu_on_left_click(true)
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
