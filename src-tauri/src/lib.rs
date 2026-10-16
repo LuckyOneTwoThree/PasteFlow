@@ -25,6 +25,7 @@ pub mod stack;
 pub mod recipe_import;
 pub mod ipc;
 pub mod hud_window;
+pub mod dashboard_window;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 
@@ -58,9 +59,14 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
 
     let builder = tauri::Builder::default();
     let state_for_setup = state.clone();
+    // P2-7: 主面板生命周期 + 诊断计数器
+    let dashboard_tracker = std::sync::Arc::new(dashboard_window::DashboardTracker::new());
+    let diagnostic_counters = std::sync::Arc::new(dashboard_window::DiagnosticCounters::new());
     builder
         .manage(ipc_state)
         .manage(state.clone())
+        .manage(dashboard_tracker.clone())
+        .manage(diagnostic_counters.clone())
         .invoke_handler(tauri::generate_handler![
             ipc::cmd_search_history,
             ipc::cmd_toggle_pin_item,
@@ -70,6 +76,8 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             ipc::cmd_list_pipe_recipes,
             cmd_hud_visible,
             cmd_hud_trigger,
+            cmd_get_diagnostic_snapshot,
+            cmd_export_sanitized_report,
         ])
         .setup(move |app| {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -80,8 +88,11 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             let md = MenuItem::with_id(app, "filter-md", "Markdown → 富文本", true, None::<&str>)?;
             let social = MenuItem::with_id(app, "filter-social", "社媒链接净化", true, None::<&str>)?;
             let sep2 = PredefinedMenuItem::separator(app)?;
+            let history = MenuItem::with_id(app, "history", "打开剪贴板历史", true, None::<&str>)?;
+            let diag = MenuItem::with_id(app, "diagnostics", "诊断看板", true, None::<&str>)?;
+            let sep3 = PredefinedMenuItem::separator(app)?;
             let quit = MenuItem::with_id(app, "quit", "退出 PasteFlow", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&enable, &sep1, &md, &social, &sep2, &quit])?;
+            let menu = Menu::with_items(app, &[&enable, &sep1, &md, &social, &sep2, &history, &diag, &sep3, &quit])?;
 
             let handle = app.handle().clone();
             let state_for_menu = state_for_setup.clone();
@@ -89,6 +100,15 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                 .tooltip("PasteFlow (灵贴)")
                 .menu(&menu)
                 .on_menu_event(move |app, event| {
+                    // P2-7: 打开主面板 (IPC Spec §1: 按需创建 + 关闭 30s 销毁)
+                    if matches!(event.id().as_ref(), "history" | "diagnostics") {
+                        let tracker = dashboard_tracker.clone();
+                        let handle = app.clone();
+                        let _ = handle.clone().run_on_main_thread(move || {
+                            dashboard_window::open(&handle, &tracker);
+                        });
+                        return;
+                    }
                     let action = match event.id().as_ref() {
                         "enable" => Some(MenuAction::ToggleEnabled),
                         "filter-md" => Some(MenuAction::ToggleFilter(
@@ -304,4 +324,30 @@ fn cmd_hud_trigger(
         }
         _ => {}
     }
+}
+
+// —— P2-7 诊断看板命令 (IPC Spec §3) ——
+
+#[tauri::command]
+fn cmd_get_diagnostic_snapshot(
+    counters: tauri::State<'_, std::sync::Arc<dashboard_window::DiagnosticCounters>>,
+) -> dashboard_window::DiagnosticSnapshotDto {
+    counters.snapshot()
+}
+
+#[derive(serde::Deserialize)]
+struct ExportReportArgs {
+    #[serde(rename = "targetPath")]
+    target_path: String,
+}
+
+#[tauri::command]
+fn cmd_export_sanitized_report(
+    counters: tauri::State<'_, std::sync::Arc<dashboard_window::DiagnosticCounters>>,
+    ipc: tauri::State<'_, ipc::IpcState>,
+    args: ExportReportArgs,
+) -> Result<serde_json::Value, String> {
+    let db = ipc.history.lock().unwrap();
+    let path = dashboard_window::export_sanitized_report(&counters, Some(&db), &args.target_path)?;
+    Ok(serde_json::json!({ "savedPath": path }))
 }

@@ -162,10 +162,11 @@
 | **P2-6** | `stack.rs`：`StackQueue`（`⌥⇧S` 开关、入队、拖拽排序、单条移除）+ 三种一键消费 `JOIN_NEWLINE`（换行拼接）/ `DEDUP_NUMBERED`（去重编号，中文验证）/ `L3_AI_SUMMARY`（P3 预留不清空队列）9 测试，语义对齐 IPC Spec `cmd_consume_stack_queue` | ✅ 9/9 |
 | **P2-9** | `recipe_import.rs`：社区配方严格校验（`deny_unknown_fields` = `additionalProperties:false`、`providerTimeoutMs ≤ 8`、`regex_pipeline` 正则预编译 + flags `^[imsU]*$`、steps ≤ 16、`ownChannels` 必含 `plainText` 且去重、id/version/category/tier 枚举约束）；`llm_stream` 配方未确认审查 → `PROMPT_REVIEW_REQUIRED`（IPC Spec §3.3 错误码），非法配方 → `RECIPE_SCHEMA_INVALID`；16 测试 | ✅ 16/16 |
 | **P2-8** | `ipc.rs`：IPC Spec §3 DTO（ClipboardItemDto 240 字符摘要 + tags 解析）+ 核心逻辑（search_history 全量命中分页 total 精确 / toggle_pin / set_stack_mode / consume_stack / import_recipe 错误码映射）+ 6 个 Tauri Commands 注册进 `lib.rs`（`cmd_search_history` / `cmd_toggle_pin_item` / `cmd_set_stack_mode` / `cmd_consume_stack_queue` / `cmd_import_pipe_recipe` / `cmd_list_pipe_recipes`），`IpcState` 接入 storage/stack/drawer/recipes；9 测试（测试驱动修复：total 计数被 `limit+offset` 截断 → 改全量检索内存分页） | ✅ 9/9 |
+| **P2-1 收尾** | `dist/hud.html`：Micro-HUD 页面（深色圆角面板 + 1–4/0·Backspace 槽位、↑↓·Tab 高亮循环、Enter 执行、Esc 隐藏不动自动挡、Tier0 600ms 绿色就绪反馈；keydown capture + preventDefault 按键绝不泄漏）；`hud_window.rs`：2s 延迟预热常驻隐藏 `micro-hud` 窗口（IPC Spec §1）、`broadcast_summon` 唤醒广播、`HudVisibilityTracker`、3 测试；`lib.rs`：轮询线程 drain `HudSummonBus` → `pasteflow://hud-summoned` 事件 + 面板置前、`cmd_hud_visible`/`cmd_hud_trigger`（槽位 0 → R4 主线程物化还原原文 `MaterializeReason::RestoreRaw`）；全链路：双击 ⌘C⌘C → Re-own + HUD 弹出 | ✅ 3/3 |
 
-**P2 测试门禁**：230 全绿（lib 189 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
+**P2 测试门禁**：236 全绿（lib 195 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
 
-**下一步**：P2-1 收尾（双击 ⌘C⌘C → Re-own + HUD 唤醒全链路）→ P2-7 主面板（Tab 1 滤镜商店 / Tab 2 诊断看板 / Tab 3 设置）。
+**下一步**：P2-7 主面板（Tab 1 滤镜商店 / Tab 2 诊断看板 / Tab 3 设置）→ 真机冒烟（双击 ⌘C⌘C 弹出 HUD）+ S8-E2E 按键吞吐。
 
 ---
 

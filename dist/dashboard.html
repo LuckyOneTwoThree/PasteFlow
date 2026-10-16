@@ -1,0 +1,362 @@
+<!doctype html>
+<!--
+  PasteFlow 主面板 (UI Spec v1.0 §5 `main-dashboard`)
+  880×600：左侧导航 200px + 右侧内容区 680px，三 Tab：
+    Tab 1 — 魔法滤镜商店（角色预设 + 配方卡片 + plainTextPolicy 下拉 + llm_stream 安全审查弹窗）
+    Tab 2 — 本地可观测性与诊断看板（changeCount / 前 20 次回调日志 / FormatGate 分布 / 导出脱敏包）
+    Tab 3 — AI 与权限设置（Tier 1 权限开关 + L3 模型配置）
+  关闭窗口 30s 后由 dashboard_window.rs 自动 destroy 释放 Webview。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>灵贴 PasteFlow</title>
+<style>
+  :root {
+    --bg: #f5f5f7; --fg: #1d1d1f; --muted: #86868b;
+    --card: #ffffff; --border: #e5e5ea; --accent: #0a84ff;
+    --ok: #30d158; --warn: #ff9f0a; --err: #ff453a;
+    --nav-w: 200px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "PingFang SC", sans-serif;
+    background: var(--bg); color: var(--fg);
+    width: 880px; height: 600px; overflow: hidden;
+    display: flex;
+  }
+  /* 左侧导航 200px */
+  nav {
+    width: var(--nav-w); height: 100%;
+    background: rgba(255,255,255,0.7);
+    border-right: 1px solid var(--border);
+    padding: 20px 12px;
+    display: flex; flex-direction: column; gap: 4px;
+    -webkit-app-region: drag;
+  }
+  nav .brand {
+    font-size: 15px; font-weight: 700;
+    padding: 0 10px 16px;
+    -webkit-app-region: no-drag;
+  }
+  nav .brand .en { font-size: 11px; color: var(--muted); font-weight: 500; }
+  nav button {
+    -webkit-app-region: no-drag;
+    text-align: left; border: 0; background: transparent;
+    padding: 9px 12px; border-radius: 9px;
+    font-size: 13px; color: var(--fg); cursor: pointer;
+  }
+  nav button.active { background: var(--accent); color: #fff; font-weight: 600; }
+  /* 右侧内容区 680px */
+  main { width: 680px; height: 100%; padding: 22px 26px; overflow-y: auto; }
+  h2 { font-size: 18px; margin-bottom: 4px; }
+  .sub { font-size: 12px; color: var(--muted); margin-bottom: 18px; }
+
+  /* Tab 1 滤镜商店 */
+  .presets { display: flex; gap: 8px; margin-bottom: 16px; }
+  .presets button {
+    padding: 7px 14px; border-radius: 18px;
+    border: 1px solid var(--border); background: var(--card);
+    font-size: 12px; cursor: pointer;
+  }
+  .presets button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
+  }
+  .card h3 { font-size: 13px; margin-bottom: 6px; }
+  .card .meta { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
+  .card .demo {
+    background: var(--bg); border-radius: 8px;
+    padding: 8px 10px; font-size: 11px; color: var(--muted);
+    margin-bottom: 10px; min-height: 52px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row select {
+    flex: 1; padding: 5px 8px; border-radius: 7px;
+    border: 1px solid var(--border); font-size: 11px; background: #fff;
+  }
+  .switch {
+    width: 34px; height: 20px; border-radius: 10px;
+    background: var(--border); position: relative; cursor: pointer; border: 0;
+  }
+  .switch.on { background: var(--ok); }
+  .switch::after {
+    content: ''; position: absolute; top: 2px; left: 2px;
+    width: 16px; height: 16px; border-radius: 50%; background: #fff;
+    transition: left 120ms;
+  }
+  .switch.on::after { left: 16px; }
+
+  /* Tab 2 诊断 */
+  .stat-row { display: flex; gap: 12px; margin-bottom: 16px; }
+  .stat {
+    flex: 1; background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 14px;
+  }
+  .stat .v { font-size: 22px; font-weight: 700; }
+  .stat .k { font-size: 11px; color: var(--muted); }
+  .bar-chart { display: flex; align-items: flex-end; gap: 8px; height: 110px; padding: 10px 4px 0; }
+  .bar-chart .bar { flex: 1; background: var(--accent); border-radius: 5px 5px 0 0; min-height: 3px; }
+  .bar-chart .bar .cap { font-size: 9px; color: var(--muted); text-align: center; margin-top: 4px; }
+  .log-list { font-size: 11px; }
+  .log-list table { width: 100%; border-collapse: collapse; }
+  .log-list th, .log-list td {
+    text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border);
+  }
+  .log-list th { color: var(--muted); font-weight: 500; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; background: var(--bg);
+  }
+  .btn {
+    padding: 8px 16px; border-radius: 9px; border: 0;
+    background: var(--accent); color: #fff; font-size: 12px; cursor: pointer;
+    margin-top: 14px;
+  }
+  /* Tab 3 设置 */
+  .set-group {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+  }
+  .set-group h3 { font-size: 13px; margin-bottom: 4px; }
+  .set-group .desc { font-size: 11px; color: var(--muted); margin-bottom: 12px; }
+  .field { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .field label { width: 110px; font-size: 12px; color: var(--muted); }
+  .field input {
+    flex: 1; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); font-size: 12px;
+  }
+  .risk {
+    font-size: 11px; color: var(--warn);
+    background: rgba(255,159,10,0.1); border-radius: 8px;
+    padding: 10px; margin-top: 8px;
+  }
+
+  /* llm_stream 安全审查弹窗 (UI Spec §5.1) */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+    display: none; align-items: center; justify-content: center;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    width: 520px; background: var(--card); border-radius: 16px;
+    padding: 22px; box-shadow: 0 24px 64px rgba(0,0,0,0.28);
+  }
+  .modal h3 { font-size: 15px; margin-bottom: 10px; }
+  .modal pre {
+    background: var(--bg); border-radius: 10px; padding: 12px;
+    font-size: 11px; overflow-x: auto; margin: 10px 0;
+  }
+  .modal .warn-text { font-size: 12px; color: var(--err); margin-bottom: 12px; }
+  .modal .actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .modal .actions .ghost {
+    background: transparent; border: 1px solid var(--border); color: var(--fg);
+  }
+</style>
+</head>
+<body>
+  <nav>
+    <div class="brand">灵贴 PasteFlow<br /><span class="en">Format Glue · v0.1.5</span></div>
+    <button data-tab="store" class="active">✨ 魔法滤镜商店</button>
+    <button data-tab="diag">📊 诊断看板</button>
+    <button data-tab="settings">⚙️ AI 与权限设置</button>
+  </nav>
+
+  <main>
+    <!-- Tab 1: 滤镜商店 -->
+    <section id="tab-store">
+      <h2>魔法滤镜商店</h2>
+      <div class="sub">内置与社区 PipeRecipe 卡片 · 纯文本通道策略可在卡片内下拉切换</div>
+      <div class="presets">
+        <button class="on">💼 日常办公</button>
+        <button>📊 财务数据</button>
+        <button>🎓 学术研究</button>
+        <button>💻 开发者</button>
+      </div>
+      <div class="grid" id="recipe-grid"></div>
+    </section>
+
+    <!-- Tab 2: 诊断看板 -->
+    <section id="tab-diag" hidden>
+      <h2>本地可观测性与诊断</h2>
+      <div class="sub">全部数据驻留本地 · 导出包不含任何剪贴板正文</div>
+      <div class="stat-row">
+        <div class="stat"><div class="v" id="d-change">—</div><div class="k">当前 changeCount</div></div>
+        <div class="stat"><div class="v" id="d-served">—</div><div class="k">今日有效转换</div></div>
+        <div class="stat"><div class="v" id="d-p95">—</div><div class="k">回调耗时 p95 (µs)</div></div>
+      </div>
+      <h3 style="font-size:13px;margin-bottom:6px;">FormatGate 拦截分布</h3>
+      <div class="bar-chart" id="gate-chart"></div>
+      <h3 style="font-size:13px;margin:14px 0 6px;">最近 20 次粘贴回调日志</h3>
+      <div class="log-list">
+        <table>
+          <thead><tr><th>前台应用</th><th>变体</th><th>耗时</th></tr></thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+      <button class="btn" id="export-report">一键导出脱敏诊断包</button>
+    </section>
+
+    <!-- Tab 3: 设置 -->
+    <section id="tab-settings" hidden>
+      <h2>AI 与权限设置</h2>
+      <div class="sub">Tier 1 权限为可选增强 · 不授权时自动挡完整可用</div>
+      <div class="set-group">
+        <h3>Tier 1 · 辅助功能（Accessibility）</h3>
+        <div class="desc">授权后 HUD 动作可自动注入 ⌘V（80ms 缩小淡出反馈）</div>
+        <div class="field">
+          <label>自动注入 ⌘V</label>
+          <button class="switch" id="sw-a11y"></button>
+        </div>
+        <div class="risk">⚠️ 授权 PasteFlow「辅助功能」后可模拟键盘输入（仅用于 HUD 动作自动 ⌘V）。不授权时所有动作改为「已准备就绪，请按 ⌘V」半自动模式，核心链路不受影响。</div>
+      </div>
+      <div class="set-group">
+        <h3>L3 · 模型配置（流式 AI）</h3>
+        <div class="desc">BYOK 直连本地/云端 · 可随时禁用</div>
+        <div class="field"><label>Base URL</label><input id="llm-base" placeholder="http://127.0.0.1:11434/v1" /></div>
+        <div class="field"><label>API Key</label><input id="llm-key" type="password" placeholder="sk-..." /></div>
+        <div class="field"><label>模型名称</label><input id="llm-model" placeholder="qwen3:8b" /></div>
+        <button class="btn" id="ollama-test">探测 Ollama 连接</button>
+        <div class="sub" id="ollama-status" style="margin:10px 0 0;"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- llm_stream 社区配方安全审查弹窗 (UI Spec §5.1) -->
+  <div class="modal-mask" id="review-modal">
+    <div class="modal">
+      <h3>⚠️ 社区配方安全审查</h3>
+      <div class="warn-text">
+        该配方将调用云端/本地大模型，系统已锁定只读安全前缀且禁止访问含 DLP 敏感凭证的剪贴板。
+      </div>
+      <pre id="review-prompt">(fallbackPrompt 未载入)</pre>
+      <div class="actions">
+        <button class="btn ghost" id="review-cancel">取消导入</button>
+        <button class="btn" id="review-confirm">确认信任并导入</button>
+      </div>
+    </div>
+  </div>
+
+<script type="module">
+const tauri = window.__TAURI__ ?? {};
+const { invoke } = tauri.core ?? {};
+const NOOP = async () => {};
+
+// —— Tab 切换 ——
+document.querySelectorAll('nav button[data-tab]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button[data-tab]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    for (const id of ['store', 'diag', 'settings']) {
+      document.getElementById('tab-' + id).hidden = id !== btn.dataset.tab;
+    }
+    if (btn.dataset.tab === 'diag') loadDiagnostics();
+  });
+});
+
+// —— Tab 1: 配方卡片 ——
+async function loadRecipes() {
+  const recipes = await (invoke ?? NOOP)('cmd_list_pipe_recipes').catch(() => []);
+  const grid = document.getElementById('recipe-grid');
+  grid.innerHTML = '';
+  (recipes ?? []).forEach(r => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <h3>${r.displayName ?? r.id}</h3>
+      <div class="meta">${r.id} · ${r.builtin ? '内置' : '社区'}</div>
+      <div class="demo">Before → After 演示</div>
+      <div class="row">
+        <button class="switch on" data-on="1"></button>
+        <select>
+          <option value="DYNAMIC_BY_TARGET">智能按目标应用 DYNAMIC</option>
+          <option value="PASSTHROUGH">保持源码 PASSTHROUGH</option>
+          <option value="CLEANED">始终净化 CLEANED</option>
+        </select>
+      </div>`;
+    card.querySelector('select').value = r.plainTextPolicy ?? 'DYNAMIC_BY_TARGET';
+    card.querySelector('.switch').addEventListener('click', (e) => {
+      e.target.classList.toggle('on');
+    });
+    grid.appendChild(card);
+  });
+}
+
+// —— Tab 2: 诊断数据 ——
+const GATE_LABELS = ['G1A', 'G1B', 'G2', 'G3', 'G4', 'G5'];
+async function loadDiagnostics() {
+  const snap = await (invoke ?? NOOP)('cmd_get_diagnostic_snapshot').catch(() => null);
+  document.getElementById('d-change').textContent = snap?.changeCount ?? '—';
+  document.getElementById('d-served').textContent = snap?.todayServed ?? '—';
+  document.getElementById('d-p95').textContent = snap?.latency?.p95Us ?? '—';
+  const chart = document.getElementById('gate-chart');
+  chart.innerHTML = '';
+  const gate = snap?.gate ?? {};
+  const max = Math.max(1, ...GATE_LABELS.map(k => gate[k] ?? 0));
+  GATE_LABELS.forEach(k => {
+    const bar = document.createElement('div');
+    bar.className = 'bar';
+    const h = Math.round(((gate[k] ?? 0) / max) * 82);
+    bar.style.height = (h + 18) + 'px';
+    bar.innerHTML = `<div class="cap">${k}<br />${gate[k] ?? 0}</div>`;
+    chart.appendChild(bar);
+  });
+  const body = document.getElementById('log-body');
+  body.innerHTML = '';
+  (snap?.served ?? []).slice(0, 20).forEach(rec => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${rec.frontmostApp ?? '—'}</td>
+      <td><span class="pill">${rec.variant ?? '—'}</span></td>
+      <td>${rec.elapsedUs != null ? rec.elapsedUs + ' µs' : '—'}</td>`;
+    body.appendChild(tr);
+  });
+}
+
+document.getElementById('export-report').addEventListener('click', async () => {
+  const r = await (invoke ?? NOOP)('cmd_export_sanitized_report', { targetPath: '' })
+    .catch(() => ({ savedPath: '(导出失败)' }));
+  alert('脱敏诊断包已导出至:\n' + (r?.savedPath ?? '(未知路径)'));
+});
+
+// —— Tab 3: 设置 ——
+const swA11y = document.getElementById('sw-a11y');
+swA11y.addEventListener('click', () => swA11y.classList.toggle('on'));
+document.getElementById('ollama-test').addEventListener('click', async () => {
+  const el = document.getElementById('ollama-status');
+  el.textContent = '正在探测 Ollama …';
+  const r = await (invoke ?? NOOP)('cmd_probe_ollama', {
+    baseUrl: document.getElementById('llm-base').value || 'http://127.0.0.1:11434',
+  }).catch(() => null);
+  el.textContent = r?.ok ? `✅ Ollama 可达 · 模型 ${r.models?.length ?? 0} 个` : '❌ Ollama 未检测到（请确认已启动）';
+});
+
+// —— llm_stream 安全审查弹窗 ——
+window.addEventListener('pasteflow-recipe-review', (ev) => {
+  document.getElementById('review-prompt').textContent =
+    ev.detail?.fallbackPrompt ?? '(无 fallbackPrompt)';
+  document.getElementById('review-modal').classList.add('open');
+});
+document.getElementById('review-cancel').addEventListener('click', () => {
+  document.getElementById('review-modal').classList.remove('open');
+  window.dispatchEvent(new CustomEvent('pasteflow-recipe-review-result', { detail: { confirmed: false } }));
+});
+document.getElementById('review-confirm').addEventListener('click', () => {
+  document.getElementById('review-modal').classList.remove('open');
+  window.dispatchEvent(new CustomEvent('pasteflow-recipe-review-result', { detail: { confirmed: true } }));
+});
+
+// —— 角色预设快捷栏 ——
+document.querySelectorAll('.presets button').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('.presets button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+  });
+});
+
+loadRecipes();
+</script>
+</body>
+</html>
