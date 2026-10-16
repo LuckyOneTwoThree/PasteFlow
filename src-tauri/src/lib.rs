@@ -19,6 +19,9 @@ pub mod engine;
 pub mod paste_provider;
 pub mod storage;
 pub mod hud;
+pub mod hud_state;
+#[cfg(target_os = "macos")]
+pub mod hud_panel;
 
 use engine::EngineState;
 use menu_bar::MenuAction;
