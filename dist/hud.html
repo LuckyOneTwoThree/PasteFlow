@@ -264,14 +264,20 @@
     <div id="ready-text">✨ 已准备就绪 · 请按 ⌘V 粘贴</div>
   </div>
 
-<script type="module">
+<script>
 // Tauri IPC: withGlobalTauri=true -> window.__TAURI__ (无打包器静态页面)
-// Tauri 2 命名空间规则: invoke 在 core; listen/emit 在 event 上 (core.listen 不存在,
-// 旧写法 `tauri.core.listen` 会让事件订阅静默失效)
-const invoke = window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
-const listen = window.__TAURI__?.event?.listen ?? window.__TAURI__?.core?.listen;
-// 浏览器冒烟兜底: Tauri API 未注入时 listen/invoke 降级为 no-op
-const NOOP = async () => {};
+// Tauri 2 命名空间规则: invoke 在 core; listen/emit 在 event 上
+function getTauriInvoke() {
+  return window.__TAURI__?.core?.invoke ?? window.__TAURI__?.invoke;
+}
+function getTauriListen() {
+  return window.__TAURI__?.event?.listen ?? window.__TAURI__?.core?.listen;
+}
+const invoke = async (cmd, args) => {
+  const fn = getTauriInvoke();
+  if (fn) return fn(cmd, args);
+  return Promise.resolve(null);
+};
 
 const panel = document.getElementById('panel');
 const slotsEl = document.getElementById('slots');
@@ -310,6 +316,14 @@ function show() {
   panel.style.transition = '';
   panel.style.transform = '';
   panel.style.opacity = '';
+  if (!actions || actions.length === 0) {
+    actions = [
+      { slotKey: '1', displayName: '智能文本清洗 (去空行/空格)', shortcutHint: 'L1', pipeId: 'builtin.format-clean' },
+      { slotKey: '2', displayName: 'Markdown / 结构化转换', shortcutHint: 'L1', pipeId: 'builtin.format-markdown' },
+      { slotKey: '3', displayName: '转为 JSON 格式', shortcutHint: 'L1', pipeId: 'builtin.format-json' },
+      { slotKey: '0', displayName: '还原原文', shortcutHint: 'Raw', pipeId: 'builtin.restore-raw' },
+    ];
+  }
   panel.classList.add('visible');
   l3State = 'idle';
   highlight = 0;
@@ -406,27 +420,35 @@ function commitL3() {
 }
 
 // L3 流式块事件 (IPC Spec §4 `pasteflow://l3-stream-chunk`)
-(listen ?? NOOP)('pasteflow://l3-stream-chunk', (ev) => {
-  const p = ev.payload ?? {};
-  if (p.streamId !== l3StreamId) return;
-  if (p.errorCode) {
-    l3Status.classList.remove('streaming');
-    l3Status.textContent = '❌ ' + p.errorCode;
-    l3State = 'idle';
+function attachL3Listener() {
+  const fn = getTauriListen();
+  if (!fn) {
+    setTimeout(attachL3Listener, 100);
     return;
   }
-  l3Body.textContent = p.accumulatedText ?? '';
-  l3Body.scrollTop = l3Body.scrollHeight;
-  if (p.done) {
-    l3Status.classList.remove('streaming');
-    if (l3State === 'streaming') {
-      l3State = 'done';
-      panel.classList.remove('streaming');
-      panel.classList.add('l3-done');
-      l3Status.textContent = '✅ 生成完毕 · ' + (p.firstTokenLatencyMs ?? 0) + 'ms 首字响应';
+  fn('pasteflow://l3-stream-chunk', (ev) => {
+    const p = ev.payload ?? {};
+    if (p.streamId !== l3StreamId) return;
+    if (p.errorCode) {
+      l3Status.classList.remove('streaming');
+      l3Status.textContent = '❌ ' + p.errorCode;
+      l3State = 'idle';
+      return;
     }
-  }
-}).catch(() => {});
+    l3Body.textContent = p.accumulatedText ?? '';
+    l3Body.scrollTop = l3Body.scrollHeight;
+    if (p.done) {
+      l3Status.classList.remove('streaming');
+      if (l3State === 'streaming') {
+        l3State = 'done';
+        panel.classList.remove('streaming');
+        panel.classList.add('l3-done');
+        l3Status.textContent = '✅ 生成完毕 · ' + (p.firstTokenLatencyMs ?? 0) + 'ms 首字响应';
+      }
+    }
+  }).catch(() => {});
+}
+attachL3Listener();
 
 function triggerSlot(slotKey) {
   const a = actions.find(x => x.slotKey === slotKey);
@@ -442,10 +464,10 @@ function triggerSlot(slotKey) {
 async function runHudTrigger(slotKey) {
   let r = null;
   try {
-    // invoke 参数键规则: cmd_hud_trigger(args: HudTriggerDto) -> { args: {...} }
-    // HudTriggerDto (camelCase): slotKeys / windowContext / frontmostBundle / tier1
+    // invoke 参数键规则: cmd_hud_trigger(args: HudTriggerDto)
     r = await invoke('cmd_hud_trigger', {
       args: {
+        slotKey,
         slotKeys: [slotKey],
         windowContext,
         frontmostBundle,
@@ -504,20 +526,32 @@ window.addEventListener('keydown', (e) => {
 }, true);
 
 // 事件接收 (IPC Spec §4 `pasteflow://hud-summoned`)
-(listen ?? NOOP)('pasteflow://hud-summoned', (ev) => {
-  const p = ev.payload ?? {};
-  actions = (p.actions ?? []).map(a => ({
-    slotKey: a.slot_key ?? a.slotKey,
-    displayName: a.display_name ?? a.displayName ?? a.title,
-    pipeId: a.pipe_id ?? a.pipeId,
-    shortcutHint: a.shortcut_hint ?? a.shortcutHint ?? a.subtitle,
-  }));
-  sourceText = p.source_text ?? p.sourceText ?? '';
-  const app = p.frontmost_bundle ?? p.frontmostBundle ?? '';
-  targetApp.textContent = app.split('.').pop() || '目标应用';
-  show();
-  (invoke ?? NOOP)('cmd_hud_visible', { visible: true });
-}).catch(() => {});
+function attachSummonListener() {
+  const fn = getTauriListen();
+  if (!fn) {
+    setTimeout(attachSummonListener, 100);
+    return;
+  }
+  fn('pasteflow://hud-summoned', (ev) => {
+    console.log('[Micro-HUD] received hud-summoned event', ev);
+    const p = ev.payload ?? {};
+    actions = (p.actions ?? []).map(a => ({
+      slotKey: a.slot_key ?? a.slotKey,
+      displayName: a.display_name ?? a.displayName ?? a.title,
+      pipeId: a.pipe_id ?? a.pipeId,
+      shortcutHint: a.shortcut_hint ?? a.shortcutHint ?? a.subtitle,
+    }));
+    sourceText = p.source_text ?? p.sourceText ?? '';
+    const app = p.frontmost_bundle ?? p.frontmostBundle ?? '';
+    targetApp.textContent = app.split('.').pop() || '目标应用';
+    show();
+    invoke('cmd_hud_visible', { visible: true }).catch(() => {});
+  }).catch((err) => {
+    console.warn('[Micro-HUD] listen error', err);
+    setTimeout(attachSummonListener, 200);
+  });
+}
+attachSummonListener();
 </script>
 </body>
 </html>

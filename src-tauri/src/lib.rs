@@ -314,11 +314,19 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                                 });
                             }
                             crate::double_copy::CopyEventKind::DoubleClick => {
-                                state.hud_summon.emit(crate::hud::summon_on_double_copy(
+                                tracing::info!(
+                                    snapshot_hash = snapshot_hash,
+                                    front = %front,
+                                    source_len = source_text.len(),
+                                    "double-copy detected -> summoning micro-hud"
+                                );
+                                let payload = crate::hud::summon_on_double_copy(
                                     snapshot_hash,
                                     &front,
                                     &source_text,
-                                ));
+                                );
+                                state.hud_summon.emit(payload.clone());
+                                hud_window::broadcast_summon(&handle_emit, &payload);
                                 state.show_toast(crate::toast::ToastRequest {
                                     text: "已唤醒 Micro-HUD (按 1–4 选择动作)".into(),
                                     level: crate::toast::ToastLevel::Info,
@@ -470,7 +478,11 @@ fn handle_global_hotkey(app: &tauri::AppHandle, id: &str, state: &Arc<EngineStat
             let source_text = clipboard_plain_text();
             let front = paste_provider::frontmost_bundle();
             let payload = hud::summon_on_hotkey(0, &front, &source_text);
-            state.hud_summon.emit(payload);
+            state.hud_summon.emit(payload.clone());
+            let handle = app.clone();
+            let _ = app.clone().run_on_main_thread(move || {
+                hud_window::broadcast_summon(&handle, &payload);
+            });
         }
         // ⌃⌥D: 显式 DLP 脱敏粘贴 (密钥 -> <REDACTED>, UI Spec §2.3 #5)
         "dlp_redact" => {
@@ -523,14 +535,23 @@ struct HudVisibleArgs {
 }
 
 #[tauri::command]
-fn cmd_hud_visible(state: tauri::State<'_, Arc<engine::EngineState>>, args: HudVisibleArgs) {
+fn cmd_hud_visible(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<engine::EngineState>>,
+    args: HudVisibleArgs,
+) {
     state.hud_visibility.set_visible(args.visible);
+    if !args.visible {
+        hud_window::hide(&app);
+    }
 }
 
 #[derive(serde::Deserialize)]
 struct HudTriggerArgs {
-    #[serde(rename = "slotKey")]
-    slot_key: String,
+    #[serde(default, rename = "slotKey")]
+    slot_key: Option<String>,
+    #[serde(default, rename = "slotKeys")]
+    slot_keys: Option<Vec<String>>,
 }
 
 /// HUD 槽位动作触发 (UI Spec §3.2: 1–4 选中 / 0·Backspace 还原原文)
@@ -542,7 +563,11 @@ fn cmd_hud_trigger(
 ) {
     hud_window::hide(&app);
     state.hud_visibility.set_visible(false);
-    match args.slot_key.as_str() {
+    let slot = args
+        .slot_key
+        .or_else(|| args.slot_keys.and_then(|keys| keys.into_iter().next()))
+        .unwrap_or_default();
+    match slot.as_str() {
         // 槽位 0: 还原原文 (builtin.restore-raw) — R4 主线程物化原始文本
         "0" | "Backspace" => {
             use crate::materializer::MaterializeReason;
@@ -552,7 +577,7 @@ fn cmd_hud_trigger(
         }
         // 槽位 1–4: 执行滤镜变换写剪贴板 + Tier 1 自动注入 ⌘V (UI Spec §3.2)
         "1" | "2" | "3" | "4" => {
-            execute_hud_slot(&app, &state, &args.slot_key);
+            execute_hud_slot(&app, &state, &slot);
         }
         _ => {}
     }

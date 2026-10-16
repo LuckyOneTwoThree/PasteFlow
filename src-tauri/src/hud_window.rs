@@ -42,49 +42,73 @@ impl HudVisibilityTracker {
     }
 }
 
-/// 延迟 2s 预热创建常驻隐藏 HUD 窗口 (IPC Spec §1)
-///
-/// 失败时仅记日志（HUD 为增强件，不影响自动挡核心链路）。
+/// 确保 micro-hud 窗口实例存在 (若尚未预热或构建失败则立即补创)
+pub fn ensure_hud_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(win) = app.get_webview_window(HUD_WINDOW_LABEL) {
+        return Some(win);
+    }
+    match WebviewWindowBuilder::new(
+        app,
+        HUD_WINDOW_LABEL,
+        WebviewUrl::App(HUD_URL.into()),
+    )
+    .title("PasteFlow Micro-HUD")
+    .inner_size(420.0, 240.0)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false) // 常驻隐藏 (IPC Spec §1)
+    .focused(false)
+    .build()
+    {
+        Ok(win) => {
+            tracing::info!("micro-hud created (hidden, resident)");
+            Some(win)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "micro-hud create failed");
+            None
+        }
+    }
+}
+
+/// 预热创建常驻隐藏 HUD 窗口 (IPC Spec §1)
 pub fn preheat(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(PREHEAT_DELAY_MS));
         let _ = app.clone().run_on_main_thread(move || {
-            if app.get_webview_window(HUD_WINDOW_LABEL).is_some() {
-                return; // 已创建（重复预热短路）
-            }
-            match WebviewWindowBuilder::new(
-                &app,
-                HUD_WINDOW_LABEL,
-                WebviewUrl::App(HUD_URL.into()),
-            )
-            .title("PasteFlow Micro-HUD")
-            .inner_size(420.0, 240.0)
-            .resizable(false)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible(false) // 常驻隐藏 (IPC Spec §1)
-            .focused(false)
-            .build()
-            {
-                Ok(_) => tracing::info!("micro-hud preheated (hidden, resident)"),
-                Err(e) => tracing::warn!(error = %e, "micro-hud preheat failed"),
-            }
+            let _ = ensure_hud_window(&app);
         });
     });
 }
 
 /// 广播 HUD 唤醒载荷 (IPC Spec §4 `pasteflow://hud-summoned`)
 ///
-/// 同时把面板置前（`show()` + `set_focus()`），实现 `⌘C⌘C` 0ms 唤醒。
+/// 定位到鼠标附近并置前显示（`show()` + `set_focus()`），实现 `⌘C⌘C` 0ms 唤醒。
 pub fn broadcast_summon(app: &tauri::AppHandle, payload: &HudSummonPayload) {
-    if let Some(win) = app.get_webview_window(HUD_WINDOW_LABEL) {
-        // 面板置前但不抢焦点到自身之外（NonActivatingHUDPanel 行为由 hud_panel 保证）
+    tracing::info!(
+        target_app = %payload.frontmost_bundle,
+        actions_count = payload.actions.len(),
+        "broadcasting micro-hud summon"
+    );
+    if let Some(win) = ensure_hud_window(app) {
+        let mouse = crate::tier1::mouse_position();
+        if let Some((mx, my)) = mouse {
+            let x = (mx - 210.0).max(20.0);
+            let y = (my + 16.0).max(40.0);
+            let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+        } else {
+            let _ = win.center();
+        }
         if let Err(e) = win.show() {
             tracing::warn!(error = %e, "micro-hud show failed");
         }
+        let _ = win.set_focus();
+        let _ = win.emit("pasteflow://hud-summoned", payload);
     }
+    let _ = app.emit("pasteflow://hud-summoned", payload);
     if let Err(e) = app.emit_to(HUD_WINDOW_LABEL, "pasteflow://hud-summoned", payload) {
         tracing::warn!(error = %e, "hud-summoned emit failed");
     }

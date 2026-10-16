@@ -14,16 +14,18 @@
 use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
+/// 机器级同内容瞬时防重/消抖窗口 (系统同一操作产生的冗余事件, <40ms)
+pub const DEBOUNCE_BURST_WINDOW: Duration = Duration::from_millis(40);
 /// 同内容消抖窗口 (Master Spec §3.2)
 pub const DEBOUNCE_WINDOW: Duration = Duration::from_millis(260);
-/// 双击 ⌘C 窗口 (Master Spec §3.2: <250ms)
-pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(250);
+/// 双击 ⌘C 窗口 (Master Spec §3.2: 450ms 人类手速宽容区间)
+pub const DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(450);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopyEventKind {
     /// 常规复制
     Normal,
-    /// 消抖命中: 260ms 内同内容重复事件, 合并 (不重复弹 Toast)
+    /// 消抖命中: 40ms 内同内容瞬时重复事件, 合并 (不重复弹 Toast)
     Debounced,
     /// 双击 ⌘C: v0.1.5 起触发 Re-own + 唤醒 Micro-HUD (不再直接还原原文)
     DoubleClick,
@@ -63,9 +65,9 @@ impl DoubleCopyDetector {
         let now = Instant::now();
         let mut s = self.state.lock();
 
-        // 消抖: 同内容 <260ms 重复
+        // 1. 瞬时消抖: 同一内容在极短时间 (<40ms) 内二次触发，视为系统/应用级冗余事件
         if let Some((t, h)) = s.last_change {
-            if h == snapshot_hash && now.duration_since(t) < DEBOUNCE_WINDOW {
+            if h == snapshot_hash && now.duration_since(t) < DEBOUNCE_BURST_WINDOW {
                 s.last_change = Some((now, snapshot_hash));
                 return CopyEventKind::Debounced;
             }
@@ -76,9 +78,10 @@ impl DoubleCopyDetector {
             return CopyEventKind::Normal;
         }
 
-        // 双击: 连续两次真实 ⌘C, <250ms, 同内容
+        // 2. 双击检测: 真实用户连续两次 ⌘C, 间隔在 [40ms, DOUBLE_CLICK_WINDOW) 且同内容
         if let Some((t, h)) = s.last_click {
-            if h == snapshot_hash && now.duration_since(t) < DOUBLE_CLICK_WINDOW {
+            let elapsed = now.duration_since(t);
+            if h == snapshot_hash && elapsed >= DEBOUNCE_BURST_WINDOW && elapsed < DOUBLE_CLICK_WINDOW {
                 s.last_click = None; // 触发后清零, 防三击连环
                 return CopyEventKind::DoubleClick;
             }
@@ -111,7 +114,7 @@ mod tests {
     fn debounce_merges_fast_duplicates() {
         let d = DoubleCopyDetector::new();
         assert_eq!(d.on_copy(111, true), CopyEventKind::Normal);
-        assert_eq!(d.on_copy(111, true), CopyEventKind::Debounced); // <260ms 同内容
+        assert_eq!(d.on_copy(111, true), CopyEventKind::Debounced); // <40ms 同内容 -> Debounced
     }
 
     #[test]
@@ -126,15 +129,15 @@ mod tests {
         let d = DoubleCopyDetector::new();
         assert_eq!(d.on_copy(111, true), CopyEventKind::Normal);
         std::thread::sleep(Duration::from_millis(80));
-        assert_eq!(d.on_copy(111, true), CopyEventKind::Debounced); // 消抖先于双击 (260ms)
+        assert_eq!(d.on_copy(111, true), CopyEventKind::DoubleClick); // 80ms 同内容双击 -> DoubleClick
     }
 
     #[test]
     fn debounce_resets_after_window() {
         let d = DoubleCopyDetector::new();
         assert_eq!(d.on_copy(111, true), CopyEventKind::Normal);
-        std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(d.on_copy(111, true), CopyEventKind::Normal); // 超出消抖窗口
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(d.on_copy(111, true), CopyEventKind::Normal); // 超出双击与消抖窗口 -> Normal
     }
 
     #[test]

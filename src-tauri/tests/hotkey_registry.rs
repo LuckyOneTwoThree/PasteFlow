@@ -48,13 +48,13 @@ fn double_click_gesture_window_is_250ms() {
 fn double_click_gesture_detected_via_double_copy() {
     // D4: 双击 ⌘C 由 DoubleCopyDetector 序列识别 (非注册式热键)
     let d = DoubleCopyDetector::new();
-    // 第一次: Normal; 快速二次同内容: 消抖合并 (Debounced);
-    // 跨消抖窗口但同内容快速重复 -> DoubleClick (业务层由此弹 HUD)
     assert_eq!(d.on_copy(777, true), CopyEventKind::Normal);
-    std::thread::sleep(Duration::from_millis(300)); // 超出消抖 260ms
-    let second = d.on_copy(777, true);
-    // 300ms > 250ms 双击窗口 -> Normal (不误判)
-    assert_eq!(second, CopyEventKind::Normal);
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(d.on_copy(777, true), CopyEventKind::DoubleClick); // 80ms 连按 -> 触发双击
+    std::thread::sleep(Duration::from_millis(500));
+    let third = d.on_copy(777, true);
+    // 500ms > 450ms 双击窗口 -> 恢复常规单次复制
+    assert_eq!(third, CopyEventKind::Normal);
 }
 
 #[test]
