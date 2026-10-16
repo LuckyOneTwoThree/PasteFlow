@@ -157,11 +157,6 @@
 |---|---|---|
 | **P2-4** SQLite/FTS5 存储层 | `storage/db.rs`：TDD §5 完整 schema（clipboard_items + clipboard_fts trigram 外部内容表 + 三同步触发器 + served_history_log + gate_skip_metrics），WAL + synchronous=NORMAL；检索规则（≥3 字符 FTS5 trigram / 1–2 字符 LIKE 回退 LIMIT 50）；8 测试含**中文子串检索**（"架构周报总结" 命中 "周报总结"） | ✅ 8/8 |
 | **P2-3** DoubleCopy 语义升级 | `double_copy.rs` 文档语义更新（双击 → Re-own + 唤醒 HUD）+ `hud.rs` 新增：`HudActionOption`（对齐 IPC Spec `HudActionOptionDto`）、`recommend_actions` 按 IM/办公/开发者三白名单生成槽位推荐，槽位 `0` 恒为 `builtin.restore-raw`；6 测试 | ✅ 6/6 |
-
-**P2 测试门禁**：178 全绿（lib 137 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
-
-**下一步**：P2-1 micro-hud 骨架（objc2 NSPanel canBecomeKey + 2s 预热常驻）+ S8-E2E 键盘吞吐验证（需辅助功能授权或人工配合）→ P2-2 键盘状态机 → P2-5/6 抽屉 + 贪吃蛇 → P2-7 主面板。
-
 | **P2-1/P2-2** | `hud_state.rs`：UI Spec §3.2 键盘状态机（1–4 触发 / 0·Backspace 还原原文 / ↑↓·Tab 循环高亮 / Enter 执行 / Esc 关闭且不动自动挡，Tier0 600ms·Tier1 80ms 反馈）12 测试；`hud_panel.rs`：`NonActivatingHUDPanel`（canBecomeKey=true / canBecomeMain=false，objc2 MainThreadOnly 子类）。踩坑：`NSPanel` 导出需 `NSResponder` feature、`MainThreadOnly` 须 `MainThreadMarker::alloc` | ✅ 12/12 |
 | **P2-5** | `drawer.rs`：类型胶囊过滤（All/Markdown/Link/Code/Image，按 tags_json/primary_type 匹配）+ Before/After 就地预览切换 + DrawerViewModel（检索由 `HistoryDb::search` 负责）7 测试 | ✅ 7/7 |
 | **P2-6** | `stack.rs`：`StackQueue`（`⌥⇧S` 开关、入队、拖拽排序、单条移除）+ 三种一键消费 `JOIN_NEWLINE`（换行拼接）/ `DEDUP_NUMBERED`（去重编号，中文验证）/ `L3_AI_SUMMARY`（P3 预留不清空队列）9 测试，语义对齐 IPC Spec `cmd_consume_stack_queue` | ✅ 9/9 |
