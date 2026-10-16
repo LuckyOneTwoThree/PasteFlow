@@ -139,6 +139,18 @@
 2. 内存红线 55MB 为 release 构建口径；debug RSS 87.8MB 不构成出口标准判定依据，P1-14 收口时以 `cargo build --release` + `phys_footprint` 为准。
 3. 真机回归 checklist（§2.2 六条出口）中的「Word/微信/Terminal/Slack 四类真机 100% 一致」「9 行 checklist」「15s 演示视频」仍待执行（依赖目标应用装机，承接 P0 遗留 R-1）。
 
+### 2.4 A 线收口结果（2026-10-16，P1-14 硬指标收口）
+
+| 子任务 | 结果 | 状态 |
+|---|---|---|
+| **A1 内存红线实测** | `cargo build --release` + `footprint` 真机实测：**静置 `phys_footprint = 17 MB`**（远低于 55MB 红线）；5 轮 `pbcopy/pbpaste` 负载循环后稳定 17MB，5/5 接管成功（change_count 2→10） | ✅ **达标，余量 38MB** |
+| **A1-2 P2 Webview 预算结论** | 红线余量 38MB ≫ 3 窗口 Webview 理论增量（3 × 6.2MB ≈ 19MB），**P2 三窗口注入不构成内存风险**，可按 §2.3 排期直接推进 | ✅ 结论固化 |
+| **A1-3 8ms 预算审计** | 5 轮负载运行日志**零「callback exceeded 8ms budget」告警**（`run_with_budget` 超限必产生 `tracing::warn`，无告警 = 无超限） | ✅ 无降级 |
+| **A2 CI 门禁** | `.github/workflows/ci.yml`：macOS runner + `cargo test --lib` + 三套门禁分步执行（l1_snapshots / guardrails / hotkey_registry），含 rust-cache | ✅ 配置就绪（推送后首跑验证） |
+| **A3 Master Spec v1.5 修订** | A.13 三项裁决全部固化生效：① §3.2 新增第 4 条「Probe-Guard 触发 Re-own 补挂」主方案（≤3 代封顶 + 路线 B 降级 + `RecentInternalWrites` 登记）；② `nil` 抑制语义修订（仅首个读取方生效，待装机校准 R-1）；③ P2 诊断看板需求固化（区分嗅探固化/真实供给 + 展示补挂代数）；④ D5 决议同步更新。**v1.4 移入 `pm/历史归档/`，v1.5 为唯一真源** | ✅ 裁决生效 |
+
+**A 线出口判定**：内存红线达标（出口标准 #4 的红线项部分闭合，`phys_footprint` 静置 17MB / 负载 17MB）+ 8ms 无降级 + CI 配置就绪 + 架构口径统一。**v0.1.0 出口剩余缺口** = 真机回归（四类应用一致性 / 9 行 checklist / 15s 演示，均依赖目标应用装机）与 CI 首跑通过验证。
+
 ---
 
 ## 3. P2 — 交互层：Micro-HUD / 历史抽屉 / 主面板（~1.5 周）
