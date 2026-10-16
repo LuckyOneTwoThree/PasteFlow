@@ -105,6 +105,17 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
             use tauri::tray::TrayIconBuilder;
 
+            // 冒烟验证钩子 (仅 debug): PASTEFLOW_SMOKE=drawer 启动 1s 后自动展开抽屉
+            #[cfg(debug_assertions)]
+            if std::env::var("PASTEFLOW_SMOKE").map(|v| v.contains("drawer")).unwrap_or(false) {
+                let h = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                    let hc = h.clone();
+                    let _ = h.run_on_main_thread(move || drawer_window::toggle(&hc));
+                });
+            }
+
             let enable = MenuItem::with_id(app, "enable", "启用 PasteFlow", true, None::<&str>)?;
             let sep1 = PredefinedMenuItem::separator(app)?;
             let md = MenuItem::with_id(app, "filter-md", "Markdown → 富文本", true, None::<&str>)?;
