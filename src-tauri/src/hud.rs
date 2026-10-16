@@ -7,6 +7,7 @@
 //! 本模块只负责「推荐动作」纯逻辑；HUD 面板弹出与键盘状态机见 P2-1/P2-2。
 
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// HUD 动作层级 (IPC Spec `HudActionOptionDto.tier`)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +119,81 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
     actions
 }
 
+// —— P2-1 收尾: HUD 唤醒协调器 (IPC Spec §4 `pasteflow://hud-summoned`) ——
+
+/// HUD 唤醒请求 (DoubleCopyDetector 双击触发 -> Re-own + 唤醒 Micro-HUD)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HudSummonPayload {
+    /// L1 快照哈希 (关联当前复制内容)
+    pub snapshot_hash: u64,
+    /// 推荐动作 (槽位 `0` 恒为还原原文)
+    pub actions: Vec<HudActionOption>,
+    /// 唤醒来源
+    pub source: HudSummonSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HudSummonSource {
+    /// 双击 ⌘C⌘C (<250ms)
+    DoubleCopy,
+    /// 全局热键 ⌃⌥V
+    GlobalHotkey,
+}
+
+/// 双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD (Dev Plan P2-1/P2-3 收尾)
+///
+/// 返回 HUD 唤醒载荷供 `pasteflow://hud-summoned` 事件广播 + 面板 `orderFrontRegardless`。
+/// Re-own 补挂由 `ClipboardOwner::next_generation` 在事件消费链路中执行（不在此重复）。
+pub fn summon_on_double_copy(
+    snapshot_hash: u64,
+    frontmost_bundle: &str,
+) -> HudSummonPayload {
+    HudSummonPayload {
+        snapshot_hash,
+        actions: recommend_actions(frontmost_bundle),
+        source: HudSummonSource::DoubleCopy,
+    }
+}
+
+/// 全局热键 ⌃⌥V 唤醒 (IPC Spec §4)
+pub fn summon_on_hotkey(snapshot_hash: u64, frontmost_bundle: &str) -> HudSummonPayload {
+    HudSummonPayload {
+        snapshot_hash,
+        actions: recommend_actions(frontmost_bundle),
+        source: HudSummonSource::GlobalHotkey,
+    }
+}
+
+/// HUD 唤醒总线 (EngineState -> lib.rs 事件广播链路)
+///
+/// 双击/热键在引擎层发出唤醒载荷，由 lib.rs 轮询 drain 后
+/// `emit_to("micro-hud", "pasteflow://hud-summoned", payload)` + 面板 `orderFrontRegardless`。
+#[derive(Debug, Default)]
+pub struct HudSummonBus {
+    queue: std::sync::Mutex<VecDeque<HudSummonPayload>>,
+}
+
+impl HudSummonBus {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 发出唤醒请求 (线程安全)
+    pub fn emit(&self, payload: HudSummonPayload) {
+        self.queue.lock().unwrap().push_back(payload);
+    }
+
+    /// 取出全部待广播请求 (lib.rs 消费)
+    pub fn drain(&self) -> Vec<HudSummonPayload> {
+        self.queue.lock().unwrap().drain(..).collect()
+    }
+
+    pub fn pending_count(&self) -> usize {
+        self.queue.lock().unwrap().len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +243,31 @@ mod tests {
         keys.sort_unstable();
         keys.dedup();
         assert_eq!(keys.len(), a.len(), "slot_key must be unique");
+    }
+
+    #[test]
+    fn summon_on_double_copy_builds_payload() {
+        let p = summon_on_double_copy(42, "com.tencent.xinWeChat");
+        assert_eq!(p.snapshot_hash, 42);
+        assert_eq!(p.source, HudSummonSource::DoubleCopy);
+        assert!(p.actions.iter().any(|a| a.pipe_id == "builtin.restore-raw"));
+    }
+
+    #[test]
+    fn summon_on_hotkey_marks_global_hotkey_source() {
+        let p = summon_on_hotkey(7, "com.apple.Terminal");
+        assert_eq!(p.source, HudSummonSource::GlobalHotkey);
+    }
+
+    #[test]
+    fn hud_summon_bus_queues_and_drains() {
+        let bus = HudSummonBus::new();
+        bus.emit(summon_on_double_copy(1, "com.unknown.a"));
+        bus.emit(summon_on_double_copy(2, "com.unknown.b"));
+        assert_eq!(bus.pending_count(), 2);
+        let drained = bus.drain();
+        assert_eq!(drained.len(), 2);
+        assert_eq!(drained[0].snapshot_hash, 1);
+        assert!(bus.drain().is_empty());
     }
 }

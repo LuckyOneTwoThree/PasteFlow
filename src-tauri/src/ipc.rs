@@ -5,6 +5,8 @@
 //!
 //! 错误码（IPC Spec §3.3）以 `IpcError` 表达，前端据 `code` 分流。
 
+#![allow(non_snake_case)] // IPC Spec §3 DTO 字段为 camelCase (跨进程契约)
+
 use crate::drawer::DrawerViewModel;
 use crate::recipe::RecipeStore;
 use crate::recipe_import::{import_recipe as import_recipe_strict, CommunityRecipe, ImportError};

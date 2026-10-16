@@ -41,6 +41,8 @@ pub struct EngineState {
     pub toast_controller: Arc<NativeToastController>,
     pub recipes: Arc<RecipeStore>,
     pub dlp: Arc<DlpDetector>,
+    /// P2-1: HUD 唤醒总线 (双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD)
+    pub hud_summon: Arc<crate::hud::HudSummonBus>,
 }
 
 impl EngineState {
@@ -60,6 +62,7 @@ impl EngineState {
             toast_controller: Arc::new(NativeToastController::new(double_copy)),
             recipes,
             dlp,
+            hud_summon: Arc::new(crate::hud::HudSummonBus::new()),
         }
     }
 
@@ -111,9 +114,19 @@ impl EngineState {
         let kind = self.double_copy.on_copy(snapshot_hash, true);
         match kind {
             crate::double_copy::CopyEventKind::Debounced => None, // 260ms 消抖抑制
-            crate::double_copy::CopyEventKind::Normal | crate::double_copy::CopyEventKind::DoubleClick => {
+            crate::double_copy::CopyEventKind::Normal => Some(ToastRequest {
+                text: "已复制".to_string(),
+                level: ToastLevel::Info,
+            }),
+            // v0.1.5 (P2-1/P2-3): 双击 ⌘C⌘C -> Re-own + 唤醒 Micro-HUD (不再直接还原原文)
+            crate::double_copy::CopyEventKind::DoubleClick => {
+                let payload = crate::hud::summon_on_double_copy(
+                    snapshot_hash,
+                    &crate::paste_provider::frontmost_bundle(),
+                );
+                self.hud_summon.emit(payload);
                 Some(ToastRequest {
-                    text: "已复制".to_string(),
+                    text: "已唤醒 Micro-HUD (按 1–4 选择动作)".to_string(),
                     level: ToastLevel::Info,
                 })
             }
