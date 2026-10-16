@@ -180,6 +180,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             let handle_tick = handle.clone();
             let history_tick = history_db.clone();
             let stack_tick = stack_queue.clone();
+            let diag_tick = diagnostic_counters.clone();
             std::thread::spawn(move || {
                 let mut last_cc: i64 = current_change_count();
                 loop {
@@ -207,9 +208,13 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                     let handle = handle_tick.clone();
                     let history = history_tick.clone();
                     let stack = stack_tick.clone();
+                    let diag = diag_tick.clone();
                     // 决策在后台 (纯逻辑); 挂载 AppKit 在主线程
                     let outcome = state.evaluate_takeover(&types, volumes, 1);
+                    diag.record_change_count(cc);
                     if !outcome.should_take_over {
+                        // P3-4: FormatGate 拦截统计 (G1A-G5)
+                        diag.record_gate_skip(dashboard_window::gate_id(outcome.verdict));
                         continue;
                     }
                     if state.clipboard_owner.is_internal_write(cc)
@@ -218,6 +223,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                         continue;
                     }
                     let handle_emit = handle.clone();
+                    let diag_inner = diag.clone();
                     let _ = handle.run_on_main_thread(move || {
                         let front = paste_provider::frontmost_bundle();
                         let source_text = clipboard_plain_text();
@@ -237,6 +243,7 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
                             source_bundle: front,
                             generation: 0,
                             source_text,
+                            diagnostics: diag_inner.clone(),
                         };
                         if let Some(new_cc) = paste_provider::mount_provider(Arc::new(deps)) {
                             tracing::info!(change_count = new_cc, "provider mounted (takeover)");

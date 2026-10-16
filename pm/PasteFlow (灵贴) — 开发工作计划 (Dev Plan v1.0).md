@@ -219,12 +219,15 @@
 | **P3-3 验收** | `l1_snapshots` 补 9 条黄金快照：网页牛皮癣（样式/属性/span/脚注/版权尾巴剥离 + 空行收敛）、PDF 断行缝合（软回车缝合/硬段落保留/CJK 边界不插空格）、开发者瑞士军刀（6 类检测/JSON 确定性/curl→fetch 保 URL/时间戳 ISO 8601） | ✅ 20/20 |
 | **P3-2** | 贪吃蛇智能汇总后端闭环：`l3_ipc::spawn_l3_stream` 抽出为可复用核心（validate → DLP → 提示词 → 注册流 → 后台线程 `run_l3` 逐块 emit → 完成载荷入缓存），`cmd_run_l3_stream` 薄包装转发；`ipc.rs` `cmd_consume_stack_queue` 新增 `ConsumeMode::L3AiSummary` 分支（`stack_source_text` 空行拼接队列 → `summary_to_prompt_type` 映射会议纪要/对比表格/待办清单 → `spawn_l3_stream` 返回真实 `streamId`，队列保持不清空）；HUD 得体打工人/智能汇总槽位 L3 语义已在 P3-1 收尾接入 | ✅ 303 全绿（+2 映射/拼接单测） |
 | **P3-2 收尾（抽屉/贪吃蛇面板 UI）** | `drawer_window.rs`：`drawer` 窗口装配（360px 无边框透明 + 磁吸停靠右缘 `dock_metrics`，`toggle` 显隐复用不销毁，`cmd_drawer_visible`）+ 菜单「剪贴板历史」接抽屉；`dist/drawer.html`：搜索栏（FTS5 150ms 防抖）+ 5 类型胶囊过滤 + 🐍 贪吃蛇面板（队列列表拖拽排序/单条移除、`换行合并粘贴 ⌘↩`、`去重编号列表`、`✨ AI 智能汇总` 三选一下拉→`L3_AI_SUMMARY`）+ L3 流式预览（Esc 取消/↩ 一次性原子上屏）+ 84px 历史卡片（相对时间/徽章/置顶/Before-After 就地预览）；`ipc.rs`：`IpcState` 历史库与队列改共享句柄（`Arc<Mutex<..>>`），`record_copy_entry` 复制事件→入库+入队，`cmd_list_stack`/`cmd_remove_stack_item`/`cmd_reorder_stack_items` 面板命令，`consume_stack` 返回 `mergedText` 由命令层原子写剪贴板；lib.rs tick 链路接数据源 + `pasteflow://stack-updated` 广播 | ✅ 308 全绿（+5 面板/入队单测） |
+| **P3-4** | 诊断链路接线（关键缺口修补）：`DiagnosticCounters` 此前零接线、看板恒空数据 → tick 链路 `record_change_count`/`record_gate_skip(gate_id)` 接入，`ProviderDeps` 持有 `diagnostics` 供 Provider 回调写入；`ServedRecordDto` 增补 `generation`（补挂代数）与 `serve_kind`（`sniffer_probe` 嗅探抢读固化 vs `real_serve` 真实粘贴供给，Master Spec §3.2 #4 / A.13 要求区分）；`gate_id`（Stage1Verdict→G1A–G5）与 `variant_label`（RouteClass→4 供给变体）映射函数 + 单测；`record_filter` 滤镜有效触发计数（§11.4 #2）；§11.4 #3 脱敏周报文件级验收单测（纯统计 JSON 含 generatedAt/historyTotal/变体/门控，绝无 rawPlainText/contentHash/snippet） | ✅ 311 全绿（+5 诊断/脱敏单测） |
 
-**P3 测试门禁**：308 全绿（lib 258 + guardrails 21 + hotkey_registry 9 + l1_snapshots 20）。
+**P3 测试门禁**：311 全绿（lib 261 + guardrails 21 + hotkey_registry 9 + l1_snapshots 20）。
+
+**P3-4 待人工配合**：§8.5 真机 9 行 checklist（Word/微信/Terminal/Slack 路由 + 嗅探抢读后 ⌘V 仍正确分支 + 退出物化）需装机目标应用与辅助功能授权后复跑；`phys_footprint < 65MB` 红线在 release 构建后实测。
 
 **P3-2 收尾冒烟验证（2026-10-16）**：真机启动 debug 构建（`PASTEFLOW_SMOKE=drawer` debug-only 自动展开钩子），抽屉窗口「PasteFlow 抽屉」真实创建，几何 `1098,24,360,932`（≈右缘磁吸 + 宽 360 + 高 ≈ 屏幕可用高−24，dock_metrics 命中）；浏览器渲染 `drawer.html` 6 项全过（搜索栏占位文案、5 类型胶囊默认高亮/切换、FTS5 搜索输入、贪吃蛇面板展开含三选一下拉 + 换行合并粘贴/去重编号/AI 智能汇总三按钮、按钮点击无未捕获异常、深色毛玻璃圆角 + toast 底条）。截屏权限受限故 UI 视觉以浏览器截图验收；真实数据流（复制→入库→入队→消费→⌘V）与 ⌥⇧V 热键吞吐属 S8-E2E 人工配合项。
 
-**下一步**：P3-4 全量 E2E 回归（§8.5 两层兼容性 + §11.4 诊断看板脱敏周报导出验收）→ P3-5 发布链路（前置：D6 品牌名裁决 + D3 Developer ID）。
+**下一步**：P3-5 发布链路（前置：D6 品牌名裁决 + D3 Developer ID）；§8.5 真机 9 行 checklist 与内存红线随装机复跑。
 
 ### 4.2 🏁 v0.1.5 发布里程碑出口标准
 

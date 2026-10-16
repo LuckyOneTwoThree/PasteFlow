@@ -45,6 +45,8 @@ pub struct ProviderDeps {
     pub generation: usize,
     /// 挂载时缓存的原始 source 文本 (PipeExecutor 输入)
     pub source_text: String,
+    /// 诊断计数器 (P3-4: 供给记录 + 滤镜触发计数)
+    pub diagnostics: Arc<crate::dashboard_window::DiagnosticCounters>,
 }
 
 // 真实 NSPasteboardItemDataProvider 实现
@@ -112,6 +114,8 @@ fn provide_data(deps: &Arc<ProviderDeps>, item: &NSPasteboardItem, r#type: &NSPa
     };
     if is_probe_guard(&ctx) {
         let _ = set_string(item, &deps.source_text, &type_str);
+        // P3-4: 嗅探抢读固化 (A.13 要求与真实粘贴供给区分)
+        record_serve(&deps, &front, "raw_passthrough", "sniffer_probe");
         return;
     }
 
@@ -119,6 +123,14 @@ fn provide_data(deps: &Arc<ProviderDeps>, item: &NSPasteboardItem, r#type: &NSPa
     let plan = deps
         .pipe_executor
         .route(&deps.source_text, &front, deps.generation);
+    // P3-4: 真实粘贴供给 (4 供给变体标签 + 滤镜触发计数)
+    record_serve(
+        &deps,
+        &front,
+        crate::dashboard_window::variant_label(plan.route),
+        "real_serve",
+    );
+    record_filter_trigger(&deps, plan.route);
     match (type_str.as_str(), plan.route) {
         // R2: SuppressRich / ImCleanedText 时 html/rtf 同步不供给 (nil)
         ("public.html", RouteClass::SuppressRich)
@@ -141,6 +153,32 @@ fn provide_data(deps: &Arc<ProviderDeps>, item: &NSPasteboardItem, r#type: &NSPa
             }
         }
     }
+}
+
+/// P3-4: 记录一次供给 (耗时自挂载/上次记录由调用方计; 此处记常量样例由 run_with_budget 包裹前计)
+fn record_serve(deps: &Arc<ProviderDeps>, front: &str, variant: &str, serve_kind: &str) {
+    let elapsed_us = deps.mounted_at.elapsed().as_micros() as u64;
+    deps.diagnostics.record_served(
+        crate::dashboard_window::ServedRecordDto {
+            frontmost_app: Some(front.to_string()),
+            variant: Some(variant.to_string()),
+            elapsed_us: Some(elapsed_us),
+            generation: Some(deps.generation),
+            serve_kind: Some(serve_kind.to_string()),
+        },
+        elapsed_us,
+    );
+}
+
+/// P3-4: 各滤镜有效触发次数 (§11.4 #2; 按路由分类计 canonical 滤镜 ID)
+fn record_filter_trigger(deps: &Arc<ProviderDeps>, route: RouteClass) {
+    let filter_id = match route {
+        RouteClass::RichOffice => "builtin.markdown-to-rich",
+        RouteClass::ImCleanedText => "builtin.markdown-to-im-cleaned",
+        RouteClass::SuppressRich => "builtin.social-link-clean",
+        RouteClass::StaticUnmanaged => "builtin.restore-raw",
+    };
+    deps.diagnostics.record_filter(filter_id);
 }
 
 /// 当前前台应用 bundle (O(1), P0 实测 0.042µs)
@@ -232,6 +270,7 @@ mod tests {
             source_bundle: "com.pasteflow.app".into(),
             generation: 0,
             source_text: "# T".into(),
+            diagnostics: Arc::new(crate::dashboard_window::DiagnosticCounters::new()),
         };
         assert_eq!(d.source_text, "# T");
         assert_eq!(d.generation, 0);

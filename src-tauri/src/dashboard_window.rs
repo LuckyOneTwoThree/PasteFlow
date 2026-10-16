@@ -30,6 +30,10 @@ pub struct ServedRecordDto {
     pub frontmost_app: Option<String>,
     pub variant: Option<String>,
     pub elapsed_us: Option<u64>,
+    /// 当前补挂代数 (0 = 原始挂载; Master Spec §3.2 #4: 诊断看板需展示)
+    pub generation: Option<usize>,
+    /// 供给类别: `sniffer_probe` 嗅探抢读固化 | `real_serve` 真实粘贴供给 (A.13 要求区分)
+    pub serve_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +51,8 @@ pub struct DiagnosticSnapshotDto {
     pub today_served: i64,
     /// FormatGate 拦截统计 (G1A/G1B/G2/G3/G4/G5 -> count)
     pub gate: HashMap<String, u64>,
+    /// 各滤镜有效触发次数 (§11.4 #2)
+    pub filter: HashMap<String, u64>,
     pub served: Vec<ServedRecordDto>,
     pub latency: LatencyDto,
 }
@@ -58,6 +64,8 @@ pub struct DiagnosticCounters {
     today_served: AtomicI64,
     /// FormatGate 拦截统计 (gate_id -> count)
     gate: std::sync::Mutex<HashMap<String, u64>>,
+    /// 各滤镜有效触发次数 (filter_id -> count, §11.4 #2)
+    filter: std::sync::Mutex<HashMap<String, u64>>,
     /// 最近 20 条回调日志
     served: std::sync::Mutex<Vec<ServedRecordDto>>,
     /// 回调耗时样本 (µs, 用于分位数)
@@ -88,6 +96,10 @@ impl DiagnosticCounters {
         *self.gate.lock().unwrap().entry(gate_id.to_string()).or_insert(0) += 1;
     }
 
+    pub fn record_filter(&self, filter_id: &str) {
+        *self.filter.lock().unwrap().entry(filter_id.to_string()).or_insert(0) += 1;
+    }
+
     pub fn snapshot(&self) -> DiagnosticSnapshotDto {
         let mut lats = self.latencies.lock().unwrap().clone();
         lats.sort_unstable();
@@ -95,6 +107,7 @@ impl DiagnosticCounters {
             change_count: self.change_count.load(Ordering::Relaxed),
             today_served: self.today_served.load(Ordering::Relaxed),
             gate: self.gate.lock().unwrap().clone(),
+            filter: self.filter.lock().unwrap().clone(),
             served: self.served.lock().unwrap().clone(),
             latency: LatencyDto {
                 p50_us: percentile(&lats, 50),
@@ -117,6 +130,32 @@ fn percentile(sorted: &[u64], pct: usize) -> u64 {
     }
     let rank = (sorted.len() * pct).div_ceil(100).max(1);
     sorted[rank - 1]
+}
+
+// —— 诊断标签映射 (§11.4: 看板展示 4 种供给变体 + 门控分布) ——
+
+/// FormatGate 判定 → 门控 ID (dashboard.html `GATE_LABELS` = G1A/G1B/G2/G3/G4/G5)
+pub fn gate_id(verdict: crate::format_gate::Stage1Verdict) -> &'static str {
+    use crate::format_gate::Stage1Verdict as V;
+    match verdict {
+        V::PrivateObject => "G1A",
+        V::PureImage => "G1B",
+        V::MultiItem => "G2",
+        V::FileCopy => "G3",
+        V::LegacyJunk => "G4",
+        V::Pass => "G5",
+    }
+}
+
+/// 路由分类 → 供给变体标签 (Master Spec §11.4 #1: rich_office / im_cleaned_text / raw_passthrough / html_suppressed)
+pub fn variant_label(route: crate::pipe_executor::RouteClass) -> &'static str {
+    use crate::pipe_executor::RouteClass as R;
+    match route {
+        R::RichOffice => "rich_office",
+        R::ImCleanedText => "im_cleaned_text",
+        R::SuppressRich => "html_suppressed",
+        R::StaticUnmanaged => "raw_passthrough",
+    }
 }
 
 // —— 窗口生命周期 ——
@@ -255,22 +294,26 @@ mod tests {
     fn counters_snapshot_collects_gate_and_latency() {
         let c = DiagnosticCounters::new();
         c.record_change_count(42);
-        c.record_gate_skip("G1B_STANDALONE_MEDIA");
-        c.record_gate_skip("G1B_STANDALONE_MEDIA");
-        c.record_gate_skip("G2_MULTI_ITEM");
+        c.record_gate_skip("G1B");
+        c.record_gate_skip("G1B");
+        c.record_gate_skip("G2");
+        c.record_filter("markdown-to-im");
         c.record_served(
             ServedRecordDto {
                 frontmost_app: Some("com.microsoft.Word".into()),
                 variant: Some("rich_office".into()),
                 elapsed_us: Some(12),
+                generation: Some(0),
+                serve_kind: Some("real_serve".into()),
             },
             12,
         );
         let s = c.snapshot();
         assert_eq!(s.change_count, 42);
         assert_eq!(s.today_served, 1);
-        assert_eq!(s.gate["G1B_STANDALONE_MEDIA"], 2);
-        assert_eq!(s.gate["G2_MULTI_ITEM"], 1);
+        assert_eq!(s.gate["G1B"], 2);
+        assert_eq!(s.gate["G2"], 1);
+        assert_eq!(s.filter["markdown-to-im"], 1);
         assert_eq!(s.served.len(), 1);
         assert_eq!(s.latency.p95_us, 12);
     }
@@ -284,6 +327,8 @@ mod tests {
                     frontmost_app: Some(format!("app{i}")),
                     variant: Some("raw_passthrough".into()),
                     elapsed_us: Some(i),
+                    generation: Some((i % 4) as usize),
+                    serve_kind: Some("real_serve".into()),
                 },
                 i,
             );
@@ -306,6 +351,8 @@ mod tests {
                 frontmost_app: Some("com.tencent.xinWeChat".into()),
                 variant: Some("im_cleaned_text".into()),
                 elapsed_us: Some(8),
+                generation: Some(1),
+                serve_kind: Some("sniffer_probe".into()),
             },
             8,
         );
@@ -314,5 +361,55 @@ mod tests {
         assert!(!json.contains("rawPlainText"));
         assert!(!json.contains("contentHash"));
         assert!(json.contains("com.tencent.xinWeChat"));
+    }
+
+    #[test]
+    fn gate_id_maps_stage1_verdicts() {
+        use crate::format_gate::Stage1Verdict as V;
+        assert_eq!(gate_id(V::PrivateObject), "G1A");
+        assert_eq!(gate_id(V::PureImage), "G1B");
+        assert_eq!(gate_id(V::MultiItem), "G2");
+        assert_eq!(gate_id(V::FileCopy), "G3");
+        assert_eq!(gate_id(V::LegacyJunk), "G4");
+        assert_eq!(gate_id(V::Pass), "G5");
+    }
+
+    #[test]
+    fn variant_label_covers_four_contract_variants() {
+        use crate::pipe_executor::RouteClass as R;
+        assert_eq!(variant_label(R::RichOffice), "rich_office");
+        assert_eq!(variant_label(R::ImCleanedText), "im_cleaned_text");
+        assert_eq!(variant_label(R::SuppressRich), "html_suppressed");
+        assert_eq!(variant_label(R::StaticUnmanaged), "raw_passthrough");
+    }
+
+    #[test]
+    fn export_sanitized_report_writes_stats_only_json() {
+        // §11.4 #3: 一键脱敏周报 = 纯统计 JSON, 不含剪贴板文本内容
+        let c = DiagnosticCounters::new();
+        c.record_gate_skip("G1B");
+        c.record_served(
+            ServedRecordDto {
+                frontmost_app: Some("com.microsoft.Word".into()),
+                variant: Some("rich_office".into()),
+                elapsed_us: Some(30),
+                generation: Some(2),
+                serve_kind: Some("real_serve".into()),
+            },
+            30,
+        );
+        let db = HistoryDb::in_memory().unwrap();
+        let path = std::env::temp_dir().join("pasteflow-e2e-report.json");
+        let saved = export_sanitized_report(&c, Some(&db), path.to_str().unwrap()).unwrap();
+        let json = std::fs::read_to_string(&saved).unwrap();
+        // 脱敏铁律: 统计字段齐全, 绝无正文
+        assert!(json.contains("generatedAt"));
+        assert!(json.contains("historyTotal"));
+        assert!(json.contains("rich_office"));
+        assert!(json.contains("\"G1B\""));
+        assert!(!json.contains("rawPlainText"));
+        assert!(!json.contains("contentHash"));
+        assert!(!json.contains("snippet"));
+        let _ = std::fs::remove_file(&saved);
     }
 }
