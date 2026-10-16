@@ -97,7 +97,12 @@ impl EngineState {
     }
 
     /// 检测到外部复制写入 (轮询线程 -> 主线程回调)
-    pub fn on_external_copy(&self, change_count: i64, snapshot_hash: u64) -> Option<ToastRequest> {
+    pub fn on_external_copy(
+        &self,
+        change_count: i64,
+        snapshot_hash: u64,
+        source_text: &str,
+    ) -> Option<ToastRequest> {
         // 防死循环: changeCount 单调 + 3s 冷却
         if !self.loop_guard.allow_change(change_count) {
             return None;
@@ -126,6 +131,7 @@ impl EngineState {
                 let payload = crate::hud::summon_on_double_copy(
                     snapshot_hash,
                     &crate::paste_provider::frontmost_bundle(),
+                    source_text,
                 );
                 self.hud_summon.emit(payload);
                 Some(ToastRequest {
@@ -270,7 +276,7 @@ mod tests {
     #[test]
     fn external_copy_toast_on_normal() {
         let s = EngineState::new();
-        let toast = s.on_external_copy(1, 111);
+        let toast = s.on_external_copy(1, 111, "src");
         assert!(toast.is_some());
     }
 
@@ -278,7 +284,7 @@ mod tests {
     fn internal_write_short_circuits_toast() {
         let s = EngineState::new();
         s.clipboard_owner.register_internal_write(42);
-        assert!(s.on_external_copy(42, 999).is_none());
+        assert!(s.on_external_copy(42, 999, "src").is_none());
     }
 
     #[test]

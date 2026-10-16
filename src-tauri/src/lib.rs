@@ -27,6 +27,7 @@ pub mod ipc;
 pub mod hud_window;
 pub mod dashboard_window;
 pub mod l3;
+pub mod l3_ipc;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 
@@ -63,11 +64,14 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
     // P2-7: 主面板生命周期 + 诊断计数器
     let dashboard_tracker = std::sync::Arc::new(dashboard_window::DashboardTracker::new());
     let diagnostic_counters = std::sync::Arc::new(dashboard_window::DiagnosticCounters::new());
+    // P3-1: L3 流式运行时 (BYOK 配置 + 流注册表 + 完成载荷缓存)
+    let l3_state = std::sync::Arc::new(l3_ipc::L3IpcState::new());
     builder
         .manage(ipc_state)
         .manage(state.clone())
         .manage(dashboard_tracker.clone())
         .manage(diagnostic_counters.clone())
+        .manage(l3_state)
         .invoke_handler(tauri::generate_handler![
             ipc::cmd_search_history,
             ipc::cmd_toggle_pin_item,
@@ -79,6 +83,11 @@ pub fn run(context: tauri::Context<tauri::Wry>) {
             cmd_hud_trigger,
             cmd_get_diagnostic_snapshot,
             cmd_export_sanitized_report,
+            l3_ipc::cmd_run_l3_stream,
+            l3_ipc::cmd_cancel_l3_stream,
+            l3_ipc::cmd_l3_commit_paste,
+            l3_ipc::cmd_probe_ollama,
+            l3_ipc::cmd_set_llm_config,
         ])
         .setup(move |app| {
             use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};

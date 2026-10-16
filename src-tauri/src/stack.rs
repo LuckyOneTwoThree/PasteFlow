@@ -114,7 +114,8 @@ impl StackQueue {
     /// 一键消费 (IPC Spec `cmd_consume_stack_queue`)
     ///
     /// - `JoinNewline` / `DedupNumbered`：同步合并文本，返回 `merged_text` 并清空队列
-    /// - `L3AiSummary`：P3 流式预留（返回 `stream_id`, 不清空队列）
+    /// - `L3AiSummary`：流式聚合在命令层 `cmd_consume_stack_queue` 执行（见 `l3_ipc::spawn_l3_stream`），
+    ///   此处不合并文本、不清空队列
     pub fn consume(&mut self, mode: ConsumeMode, _prompt: Option<SummaryPromptType>) -> ConsumeResult {
         match mode {
             ConsumeMode::JoinNewline | ConsumeMode::DedupNumbered => {

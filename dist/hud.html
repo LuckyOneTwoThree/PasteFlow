@@ -40,6 +40,53 @@
   }
   #panel.visible { display: flex; }
   #panel.ready { outline: 2px solid var(--hud-ready); }
+  /* P3-1: L3 流式预览展开态 (UI Spec §3.3) */
+  #panel.streaming, #panel.l3-done {
+    width: calc(100% - 16px);
+  }
+  .l3-preview {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #panel.streaming .l3-preview, #panel.l3-done .l3-preview { display: flex; }
+  #panel.streaming .header, #panel.streaming .slot,
+  #panel.l3-done .header, #panel.l3-done .slot { display: none; }
+  .l3-status {
+    font-size: 11px; letter-spacing: 0.4px;
+    color: var(--hud-muted);
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0 4px;
+  }
+  .l3-status.streaming::before {
+    content: '⚡ ';
+    animation: breathe 1.2s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+  .l3-body {
+    max-height: 140px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.55;
+    color: var(--hud-fg);
+    background: rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    -webkit-user-select: text; user-select: text;
+  }
+  .l3-actions {
+    display: none;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--hud-muted);
+    padding: 0 4px;
+  }
+  #panel.l3-done .l3-actions { display: flex; }
+  .l3-actions .primary {
+    color: var(--hud-ready); font-weight: 600;
+  }
   .header {
     font-size: 11px; letter-spacing: 0.4px;
     color: var(--hud-muted);
@@ -84,6 +131,16 @@
       <span id="target-app"></span>
     </div>
     <div id="slots"></div>
+    <!-- P3-1: L3 流式预览 (UI Spec §3.3 展开态) -->
+    <div class="l3-preview">
+      <div class="l3-status" id="l3-status">AI 正在生成…</div>
+      <div class="l3-body" id="l3-body"></div>
+      <div class="l3-actions" id="l3-actions">
+        <span class="primary">↩ 确认粘贴</span>
+        <span>⌘C 仅复制</span>
+        <span>Esc 取消</span>
+      </div>
+    </div>
     <div id="ready-text">已准备就绪，请按 ⌘V</div>
   </div>
 
@@ -96,9 +153,14 @@ const NOOP = async () => {};
 const panel = document.getElementById('panel');
 const slotsEl = document.getElementById('slots');
 const targetApp = document.getElementById('target-app');
+const l3Status = document.getElementById('l3-status');
+const l3Body = document.getElementById('l3-body');
 
 let actions = [];   // HudActionOptionDto[]
 let highlight = 0;  // 默认高亮第 1 项 (UI Spec §3.2)
+let sourceText = ''; // 当前复制原文 (L3 输入源)
+let l3State = 'idle'; // idle | streaming | done
+let l3StreamId = null;
 
 function render() {
   slotsEl.innerHTML = '';
@@ -116,19 +178,102 @@ function render() {
 }
 
 function show() {
-  panel.classList.remove('ready');
+  panel.classList.remove('ready', 'streaming', 'l3-done');
   panel.classList.add('visible');
+  l3State = 'idle';
   highlight = 0;
   render();
 }
 
 function hide() {
-  panel.classList.remove('visible', 'ready');
+  panel.classList.remove('visible', 'ready', 'streaming', 'l3-done');
+  l3State = 'idle';
   // 托盘宿主窗口隐藏但常驻 (IPC Spec §1: micro-hud 常驻不销毁)
   invoke?.('cmd_hud_visible', { visible: false }).catch(() => {});
 }
 
+// —— P3-1: L3 流式动作 (UI Spec §3.3 展开态) ——
+
+function l3PromptTypeFor(slotKey) {
+  const a = actions.find(x => x.slotKey === slotKey);
+  const m = {
+    'builtin.l3-polite-tone': 'POLITE_TONE',
+    'builtin.l3-meeting-notes': 'MEETING_NOTES',
+    'builtin.l3-comparison-table': 'COMPARISON_TABLE',
+    'builtin.l3-todo-list': 'TODO_LIST',
+  };
+  return m[a?.pipeId ?? ''] ?? 'MEETING_NOTES';
+}
+
+async function startL3(slotKey) {
+  l3State = 'streaming';
+  l3StreamId = null;
+  l3Body.textContent = '';
+  l3Status.textContent = '⚡ AI 正在生成…';
+  l3Status.classList.add('streaming');
+  panel.classList.remove('ready', 'l3-done');
+  panel.classList.add('streaming');
+  try {
+    const r = await invoke('cmd_run_l3_stream', {
+      promptType: l3PromptTypeFor(slotKey),
+      sourceText,
+    });
+    l3StreamId = r?.streamId ?? null;
+  } catch (e) {
+    l3Status.classList.remove('streaming');
+    l3Status.textContent = '❌ ' + (e?.message ?? e?.code ?? 'L3 启动失败');
+  }
+}
+
+function cancelL3() {
+  if (l3StreamId && l3State === 'streaming') {
+    invoke?.('cmd_cancel_l3_stream', { streamId: l3StreamId }).catch(() => {});
+  }
+  hide();
+}
+
+function commitL3() {
+  if (!l3StreamId) return;
+  invoke?.('cmd_l3_commit_paste', { streamId: l3StreamId })
+    .then(() => {
+      panel.classList.remove('streaming', 'l3-done');
+      panel.classList.add('ready');
+      document.getElementById('ready-text').textContent = '已准备就绪，请按 ⌘V';
+      setTimeout(hide, 600);
+    })
+    .catch(() => hide());
+}
+
+// L3 流式块事件 (IPC Spec §4 `pasteflow://l3-stream-chunk`)
+(listen ?? NOOP)('pasteflow://l3-stream-chunk', (ev) => {
+  const p = ev.payload ?? {};
+  if (p.streamId !== l3StreamId) return;
+  if (p.errorCode) {
+    l3Status.classList.remove('streaming');
+    l3Status.textContent = '❌ ' + p.errorCode;
+    l3State = 'idle';
+    return;
+  }
+  l3Body.textContent = p.accumulatedText ?? '';
+  l3Body.scrollTop = l3Body.scrollHeight;
+  if (p.done) {
+    l3Status.classList.remove('streaming');
+    if (l3State === 'streaming') {
+      l3State = 'done';
+      panel.classList.remove('streaming');
+      panel.classList.add('l3-done');
+      l3Status.textContent = '✅ 生成完毕 · ' + (p.firstTokenLatencyMs ?? 0) + 'ms 首字';
+    }
+  }
+}).catch(() => {});
+
 function triggerSlot(slotKey) {
+  const a = actions.find(x => x.slotKey === slotKey);
+  // L3 流式槽位: 进入展开态, 不直接上屏 (UI Spec §3.3)
+  if (a?.pipeId?.startsWith('builtin.l3-')) {
+    startL3(slotKey);
+    return;
+  }
   invoke?.('cmd_hud_trigger', { slotKey }).catch(() => {});
   if (slotKey === '0' || slotKey === 'Backspace') {
     panel.classList.remove('visible', 'ready');
@@ -144,6 +289,12 @@ function triggerSlot(slotKey) {
 window.addEventListener('keydown', (e) => {
   e.preventDefault();
   e.stopPropagation();
+  // L3 流式态按键: Esc 取消 / Enter 确认粘贴 / ⌘C 仅复制
+  if (l3State === 'streaming' || l3State === 'done') {
+    if (e.key === 'Escape') { cancelL3(); return; }
+    if (e.key === 'Enter' && l3State === 'done') { commitL3(); return; }
+    return; // 其余按键在流式态一律吞掉, 绝不泄漏
+  }
   const map = { '1': '1', '2': '2', '3': '3', '4': '4', '0': '0', 'Backspace': 'Backspace' };
   switch (e.key) {
     case 'ArrowUp':
@@ -171,11 +322,12 @@ window.addEventListener('keydown', (e) => {
   const p = ev.payload ?? {};
   actions = (p.actions ?? []).map(a => ({
     slotKey: a.slot_key ?? a.slotKey,
-    displayName: a.display_name ?? a.displayName,
+    displayName: a.display_name ?? a.displayName ?? a.title,
     pipeId: a.pipe_id ?? a.pipeId,
-    shortcutHint: a.shortcut_hint ?? a.shortcutHint,
+    shortcutHint: a.shortcut_hint ?? a.shortcutHint ?? a.subtitle,
   }));
-  targetApp.textContent = p.frontmost_bundle ?? '';
+  sourceText = p.source_text ?? p.sourceText ?? '';
+  targetApp.textContent = p.frontmost_bundle ?? p.frontmostBundle ?? '';
   show();
   (invoke ?? NOOP)('cmd_hud_visible', { visible: true });
 }).catch(() => {});

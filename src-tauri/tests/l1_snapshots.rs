@@ -7,7 +7,8 @@
 //! 核心不变量逐条锁定: D1 杀手滤镜三通道差异性 / IM 净化 / 追踪剥离 / DLP 静默。
 
 use pasteflow_lib::filters::{
-    clean_social_text, markdown_to_html, markdown_to_im_text, markdown_to_rtf,
+    clean_social_text, clean_web_text, detect_dev_kind, markdown_to_html, markdown_to_im_text,
+    markdown_to_rtf, reflow_pdf_text, DevPayloadKind,
 };
 use pasteflow_lib::privacy_guard::{DlpAction, DlpDetector};
 use pasteflow_lib::pipe_executor::{classify_target, RouteClass, PipeExecutor};
@@ -140,4 +141,106 @@ fn snapshot_im_cleaned_only_plain() {
     assert!(plan.html.is_none());
     assert!(plan.rtf.is_none());
     assert!(plan.plain.unwrap().contains("【加粗】"));
+}
+
+// —— P3-3: 【网页牛皮癣洗白】(Master Spec §10.2 #4) ——
+
+#[test]
+fn snapshot_web_cleaner_strips_boilerplate() {
+    let src = r#"<p style="font-size:72px" class="hero">正文标题</p>
+<span id="track">关键论点[1]</span>
+© 2026 某某公司 版权所有
+阅读原文
+关注我们"#;
+    let out = clean_web_text(src);
+    // 样式/属性/冗余 span 剥离
+    assert!(!out.contains("font-size"));
+    assert!(!out.contains("class="));
+    assert!(!out.contains("<span"));
+    // 脚注编号剥离
+    assert!(!out.contains("[1]"));
+    assert!(out.contains("关键论点"));
+    // 版权尾巴与推广语剥离
+    assert!(!out.contains("版权所有"));
+    assert!(!out.contains("阅读原文"));
+    assert!(!out.contains("关注我们"));
+    // 正文保留
+    assert!(out.contains("正文标题"));
+}
+
+#[test]
+fn snapshot_web_cleaner_collapses_blank_lines() {
+    let out = clean_web_text("段落一。\n\n\n\n\n段落二。");
+    assert!(!out.contains("\n\n\n"));
+    assert!(out.contains("段落一。"));
+    assert!(out.contains("段落二。"));
+}
+
+// —— P3-3: 【PDF 断行缝合】(Master Spec §10.2 #5) ——
+
+#[test]
+fn snapshot_pdf_reflow_joins_soft_wraps() {
+    // 软回车缝合: 英文词间补空格, 跨行连字符合并
+    let out = reflow_pdf_text("This is a sen-\ntence wrapped\nby PDF extraction.");
+    assert!(!out.contains("\n"));
+    assert!(out.contains("sentence wrapped by PDF extraction."));
+}
+
+#[test]
+fn snapshot_pdf_reflow_keeps_hard_paragraphs() {
+    // 句末标点结尾保留硬段落 (空行分隔)
+    let out = reflow_pdf_text("第一段结束。\n第二段开始。");
+    assert!(out.contains("第一段结束。\n\n第二段开始。"));
+}
+
+#[test]
+fn snapshot_pdf_reflow_cjk_boundary_no_space() {
+    // CJK 边界缝合不插入空格 (Master Spec §10.2 #5)
+    let out = reflow_pdf_text("这是被 PDF\n截断的中文句子");
+    assert_eq!(out, "这是被 PDF截断的中文句子");
+}
+
+// —— P3-3: 【开发者瑞士军刀】(Master Spec §10.2 #6, PASSTHROUGH + MANUAL_ONLY) ——
+
+#[test]
+fn snapshot_dev_swiss_detects_kinds() {
+    assert_eq!(detect_dev_kind("{\"a\":1}"), DevPayloadKind::Json);
+    assert_eq!(
+        detect_dev_kind("curl https://x.dev/api -H 'a: b'"),
+        DevPayloadKind::Curl
+    );
+    assert_eq!(detect_dev_kind("1729800000"), DevPayloadKind::UnixTimestamp);
+    assert_eq!(
+        detect_dev_kind("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig"),
+        DevPayloadKind::Jwt
+    );
+    assert_eq!(detect_dev_kind("aGVsbG8gd29ybGQ="), DevPayloadKind::Base64);
+    assert_eq!(detect_dev_kind("普通句子 hello"), DevPayloadKind::Unknown);
+}
+
+#[test]
+fn snapshot_dev_swiss_json_format_is_deterministic() {
+    // 同输入两次输出一致 (确定性算子, TDD §7.4)
+    let a = pasteflow_lib::filters::dev_swiss::format_json(r#"{"b":2,"a":1}"#).unwrap();
+    let b = pasteflow_lib::filters::dev_swiss::format_json(r#"{"b":2,"a":1}"#).unwrap();
+    assert_eq!(a, b);
+    assert!(a.contains("\"a\": 1"));
+}
+
+#[test]
+fn snapshot_dev_swiss_curl_to_fetch_keeps_url() {
+    let out = pasteflow_lib::filters::dev_swiss::curl_to_fetch(
+        "curl https://x.dev/api?keep=1 -X POST --data '{\"k\":1}'",
+    )
+    .unwrap();
+    assert!(out.contains("https://x.dev/api?keep=1"));
+    assert!(out.contains("fetch("));
+    assert!(out.contains("POST"));
+}
+
+#[test]
+fn snapshot_dev_swiss_timestamp_roundtrip() {
+    // 秒级 Unix 时间戳 → ISO 8601 (UTC)
+    let r = pasteflow_lib::filters::dev_swiss::decode_timestamp("1729800000").unwrap();
+    assert_eq!(r, "2024-10-24T20:00:00Z");
 }

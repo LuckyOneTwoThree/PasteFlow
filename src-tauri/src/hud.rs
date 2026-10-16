@@ -18,6 +18,16 @@ pub enum ActionTier {
     L3StreamingAi,
 }
 
+/// HUD 槽位的 L3 动作语义 (P3-2: 贪吃蛇智能汇总 / 得体打工人)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum HudL3Slot {
+    MeetingNotes,
+    ComparisonTable,
+    TodoList,
+    PoliteTone,
+}
+
 /// 推荐动作 (IPC Spec `HudActionOptionDto`)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HudActionOption {
@@ -30,6 +40,9 @@ pub struct HudActionOption {
     pub subtitle: Option<String>,
     pub tier: ActionTier,
     pub icon: String,
+    /// L3 槽位语义 (仅 tier == L3_STREAMING_AI 时有值, P3-2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l3_slot: Option<HudL3Slot>,
 }
 
 // —— §3.2 应用白名单 ——
@@ -65,7 +78,7 @@ const DEV_WHITELIST: &[&str] = &[
 ///   - 槽位 `0` 恒为「还原原文」
 ///   - 槽位 `1..` 依 IM / 办公 / 开发者白名单上下文推荐
 pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
-    let mut actions = Vec::with_capacity(3);
+    let mut actions = Vec::with_capacity(5);
 
     if IM_WHITELIST.contains(&frontmost_bundle) {
         actions.push(HudActionOption {
@@ -75,6 +88,7 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
             subtitle: Some("剥离 # 与 ** 、优化列表缩进".into()),
             tier: ActionTier::L1Local,
             icon: "sparkles".into(),
+            l3_slot: None,
         });
     } else if OFFICE_WHITELIST.contains(&frontmost_bundle) {
         actions.push(HudActionOption {
@@ -84,6 +98,7 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
             subtitle: Some("生成 Word/Notion 友好 HTML".into()),
             tier: ActionTier::L1Local,
             icon: "text-format".into(),
+            l3_slot: None,
         });
     } else if DEV_WHITELIST.contains(&frontmost_bundle) {
         actions.push(HudActionOption {
@@ -93,6 +108,7 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
             subtitle: Some("100% 原始 Markdown".into()),
             tier: ActionTier::L1Local,
             icon: "code".into(),
+            l3_slot: None,
         });
     }
 
@@ -104,6 +120,27 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
         subtitle: Some("剥离追踪参数".into()),
         tier: ActionTier::L1Local,
         icon: "link".into(),
+        l3_slot: None,
+    });
+
+    // P3-2: L3 流式动作 (UI Spec §3.3 流式预览展开态)
+    actions.push(HudActionOption {
+        slot_key: "3".into(),
+        pipe_id: "builtin.l3-polite-tone".into(),
+        title: "得体打工人润色".into(),
+        subtitle: Some("AI 委婉专业改写 (L3)".into()),
+        tier: ActionTier::L3StreamingAi,
+        icon: "briefcase".into(),
+        l3_slot: Some(HudL3Slot::PoliteTone),
+    });
+    actions.push(HudActionOption {
+        slot_key: "4".into(),
+        pipe_id: "builtin.l3-meeting-notes".into(),
+        title: "AI 智能汇总".into(),
+        subtitle: Some("生成结构化纪要 (L3)".into()),
+        tier: ActionTier::L3StreamingAi,
+        icon: "sparkles".into(),
+        l3_slot: Some(HudL3Slot::MeetingNotes),
     });
 
     // 槽位 0: 恒为还原原文 (IPC Spec: 'builtin.restore-raw' 对应槽位 '0')
@@ -114,6 +151,7 @@ pub fn recommend_actions(frontmost_bundle: &str) -> Vec<HudActionOption> {
         subtitle: None,
         tier: ActionTier::L1Local,
         icon: "undo".into(),
+        l3_slot: None,
     });
 
     actions
@@ -130,6 +168,10 @@ pub struct HudSummonPayload {
     pub actions: Vec<HudActionOption>,
     /// 唤醒来源
     pub source: HudSummonSource,
+    /// 前台应用 bundle id (HUD 顶部上下文栏)
+    pub frontmost_bundle: String,
+    /// 当前复制原文 (L3 流式输入源, P3-1)
+    pub source_text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,20 +190,29 @@ pub enum HudSummonSource {
 pub fn summon_on_double_copy(
     snapshot_hash: u64,
     frontmost_bundle: &str,
+    source_text: &str,
 ) -> HudSummonPayload {
     HudSummonPayload {
         snapshot_hash,
         actions: recommend_actions(frontmost_bundle),
         source: HudSummonSource::DoubleCopy,
+        frontmost_bundle: frontmost_bundle.to_string(),
+        source_text: source_text.to_string(),
     }
 }
 
 /// 全局热键 ⌃⌥V 唤醒 (IPC Spec §4)
-pub fn summon_on_hotkey(snapshot_hash: u64, frontmost_bundle: &str) -> HudSummonPayload {
+pub fn summon_on_hotkey(
+    snapshot_hash: u64,
+    frontmost_bundle: &str,
+    source_text: &str,
+) -> HudSummonPayload {
     HudSummonPayload {
         snapshot_hash,
         actions: recommend_actions(frontmost_bundle),
         source: HudSummonSource::GlobalHotkey,
+        frontmost_bundle: frontmost_bundle.to_string(),
+        source_text: source_text.to_string(),
     }
 }
 
@@ -247,23 +298,38 @@ mod tests {
 
     #[test]
     fn summon_on_double_copy_builds_payload() {
-        let p = summon_on_double_copy(42, "com.tencent.xinWeChat");
+        let p = summon_on_double_copy(42, "com.tencent.xinWeChat", "原文");
         assert_eq!(p.snapshot_hash, 42);
         assert_eq!(p.source, HudSummonSource::DoubleCopy);
+        assert_eq!(p.source_text, "原文");
+        assert_eq!(p.frontmost_bundle, "com.tencent.xinWeChat");
         assert!(p.actions.iter().any(|a| a.pipe_id == "builtin.restore-raw"));
     }
 
     #[test]
     fn summon_on_hotkey_marks_global_hotkey_source() {
-        let p = summon_on_hotkey(7, "com.apple.Terminal");
+        let p = summon_on_hotkey(7, "com.apple.Terminal", "src");
         assert_eq!(p.source, HudSummonSource::GlobalHotkey);
+        assert_eq!(p.source_text, "src");
+    }
+
+    #[test]
+    fn l3_slots_carry_semantics() {
+        // P3-2: 槽位 3 得体打工人 / 槽位 4 智能汇总, 均为 L3 流式
+        let a = recommend_actions("com.unknown.app");
+        let t3 = a.iter().find(|x| x.slot_key == "3").unwrap();
+        let t4 = a.iter().find(|x| x.slot_key == "4").unwrap();
+        assert_eq!(t3.tier, ActionTier::L3StreamingAi);
+        assert_eq!(t3.l3_slot, Some(HudL3Slot::PoliteTone));
+        assert_eq!(t4.tier, ActionTier::L3StreamingAi);
+        assert_eq!(t4.l3_slot, Some(HudL3Slot::MeetingNotes));
     }
 
     #[test]
     fn hud_summon_bus_queues_and_drains() {
         let bus = HudSummonBus::new();
-        bus.emit(summon_on_double_copy(1, "com.unknown.a"));
-        bus.emit(summon_on_double_copy(2, "com.unknown.b"));
+        bus.emit(summon_on_double_copy(1, "com.unknown.a", "a"));
+        bus.emit(summon_on_double_copy(2, "com.unknown.b", "b"));
         assert_eq!(bus.pending_count(), 2);
         let drained = bus.drain();
         assert_eq!(drained.len(), 2);

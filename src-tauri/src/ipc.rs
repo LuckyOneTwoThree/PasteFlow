@@ -216,6 +216,25 @@ pub fn consume_stack(stack: &mut StackQueue, args: &ConsumeStackArgs) -> IpcResu
     })
 }
 
+/// 贪吃蛇队列文本拼接（L3 汇总输入源, 片段间空行分隔）
+pub fn stack_source_text(stack: &StackQueue) -> String {
+    stack
+        .entries()
+        .iter()
+        .map(|e| e.plain_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// 汇总提示词类型 → L3 提示词（默认会议纪要）
+pub fn summary_to_prompt_type(p: Option<SummaryPromptType>) -> crate::l3::PromptType {
+    match p.unwrap_or(SummaryPromptType::MeetingNotes) {
+        SummaryPromptType::MeetingNotes => crate::l3::PromptType::MeetingNotes,
+        SummaryPromptType::ComparisonTable => crate::l3::PromptType::ComparisonTable,
+        SummaryPromptType::TodoList => crate::l3::PromptType::TodoList,
+    }
+}
+
 /// 社区配方导入（严格校验 + llm_stream 审查确认）
 pub fn import_recipe(raw_json: &str, user_confirmed: bool) -> IpcResult<CommunityRecipe> {
     import_recipe_strict(raw_json, user_confirmed).map_err(|e| match e {
@@ -259,10 +278,27 @@ pub fn cmd_set_stack_mode(
 
 #[tauri::command]
 pub fn cmd_consume_stack_queue(
+    app: tauri::AppHandle,
     state: tauri::State<'_, IpcState>,
+    l3: tauri::State<'_, std::sync::Arc<crate::l3_ipc::L3IpcState>>,
     args: ConsumeStackArgs,
 ) -> IpcResult<ConsumeStackReturn> {
     let mut stack = state.stack.lock().unwrap();
+    if args.mode == ConsumeMode::L3AiSummary {
+        // P3-2: 贪吃蛇智能汇总 — 队列文本拼接送 L3 流式，队列保持不清空（汇总完成由用户决定上屏）
+        if stack.is_empty() {
+            return Err(IpcError::new("STACK_EMPTY", "stack queue is empty"));
+        }
+        let source_text = stack_source_text(&stack);
+        let consumed_count = stack.len();
+        drop(stack);
+        let prompt_type = summary_to_prompt_type(args.summaryPromptType);
+        let stream_id = crate::l3_ipc::spawn_l3_stream(&app, l3.inner(), prompt_type, &source_text)?;
+        return Ok(ConsumeStackReturn {
+            consumedCount: consumed_count,
+            streamId: Some(stream_id),
+        });
+    }
     consume_stack(&mut stack, &args)
 }
 
@@ -319,6 +355,23 @@ mod tests {
             db.insert_item(&make_item(text, app, None)).unwrap();
         }
         db
+    }
+
+    #[test]
+    fn stack_source_text_joins_entries_with_blank_line() {
+        let mut q = StackQueue::new();
+        q.set_active(true);
+        q.push(StackEntry { id: "1".into(), plain_text: "片段一".into(), source_app_name: "Notion".into() });
+        q.push(StackEntry { id: "2".into(), plain_text: "片段二".into(), source_app_name: "Notes".into() });
+        assert_eq!(stack_source_text(&q), "片段一\n\n片段二");
+    }
+
+    #[test]
+    fn summary_to_prompt_type_maps_and_defaults() {
+        use crate::l3::PromptType;
+        assert!(matches!(summary_to_prompt_type(None), PromptType::MeetingNotes));
+        assert!(matches!(summary_to_prompt_type(Some(SummaryPromptType::ComparisonTable)), PromptType::ComparisonTable));
+        assert!(matches!(summary_to_prompt_type(Some(SummaryPromptType::TodoList)), PromptType::TodoList));
     }
 
     #[test]

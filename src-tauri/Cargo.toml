@@ -34,6 +34,8 @@ uuid = { version = "1", features = ["v7"] }
 # P3-3 开发者瑞士军刀 (JWT/Base64 解码 + 时间戳转 ISO 8601)
 base64 = "0.22"
 time = { version = "0.3", features = ["formatting"] }
+# P3-1 L3 网络层: OpenAI 兼容 SSE 流式客户端 (BYOK + 本地 Ollama 探测)
+ureq = { version = "2.10", features = ["json"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"
