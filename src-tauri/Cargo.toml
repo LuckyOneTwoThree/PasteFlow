@@ -31,6 +31,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # FTS5 由 libsqlite3-sys bundled 模式默认编译 (SQLITE_ENABLE_FTS5)
 rusqlite = { version = "0.40", features = ["bundled"] }
 uuid = { version = "1", features = ["v7"] }
+# P3-3 开发者瑞士军刀 (JWT/Base64 解码 + 时间戳转 ISO 8601)
+base64 = "0.22"
+time = { version = "0.3", features = ["formatting"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.5"

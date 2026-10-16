@@ -2356,6 +2356,7 @@ dependencies = [
 name = "pasteflow"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "blake3",
  "libc",
  "objc2 0.5.3",
@@ -2369,6 +2370,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",

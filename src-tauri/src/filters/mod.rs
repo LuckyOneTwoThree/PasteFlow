@@ -6,10 +6,16 @@
 pub mod budget;
 pub mod markdown;
 pub mod social_link_cleaner;
+pub mod web_cleaner;
+pub mod pdf_reflow;
+pub mod dev_swiss;
 
 pub use budget::{run_with_budget, BudgetOutcome, BUDGET};
 pub use markdown::{markdown_to_html, markdown_to_rtf, markdown_to_im_text};
 pub use social_link_cleaner::clean_social_text;
+pub use web_cleaner::clean_web_text;
+pub use pdf_reflow::reflow_pdf_text;
+pub use dev_swiss::{detect_kind as detect_dev_kind, DevPayloadKind};
 
 use crate::privacy_guard::DlpAction;
 

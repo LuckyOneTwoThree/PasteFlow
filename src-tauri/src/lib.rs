@@ -26,6 +26,7 @@ pub mod recipe_import;
 pub mod ipc;
 pub mod hud_window;
 pub mod dashboard_window;
+pub mod l3;
 #[cfg(target_os = "macos")]
 pub mod hud_panel;
 

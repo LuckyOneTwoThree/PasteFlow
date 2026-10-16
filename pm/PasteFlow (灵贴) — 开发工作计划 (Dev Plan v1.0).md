@@ -163,10 +163,11 @@
 | **P2-9** | `recipe_import.rs`：社区配方严格校验（`deny_unknown_fields` = `additionalProperties:false`、`providerTimeoutMs ≤ 8`、`regex_pipeline` 正则预编译 + flags `^[imsU]*$`、steps ≤ 16、`ownChannels` 必含 `plainText` 且去重、id/version/category/tier 枚举约束）；`llm_stream` 配方未确认审查 → `PROMPT_REVIEW_REQUIRED`（IPC Spec §3.3 错误码），非法配方 → `RECIPE_SCHEMA_INVALID`；16 测试 | ✅ 16/16 |
 | **P2-8** | `ipc.rs`：IPC Spec §3 DTO（ClipboardItemDto 240 字符摘要 + tags 解析）+ 核心逻辑（search_history 全量命中分页 total 精确 / toggle_pin / set_stack_mode / consume_stack / import_recipe 错误码映射）+ 6 个 Tauri Commands 注册进 `lib.rs`（`cmd_search_history` / `cmd_toggle_pin_item` / `cmd_set_stack_mode` / `cmd_consume_stack_queue` / `cmd_import_pipe_recipe` / `cmd_list_pipe_recipes`），`IpcState` 接入 storage/stack/drawer/recipes；9 测试（测试驱动修复：total 计数被 `limit+offset` 截断 → 改全量检索内存分页） | ✅ 9/9 |
 | **P2-1 收尾** | `dist/hud.html`：Micro-HUD 页面（深色圆角面板 + 1–4/0·Backspace 槽位、↑↓·Tab 高亮循环、Enter 执行、Esc 隐藏不动自动挡、Tier0 600ms 绿色就绪反馈；keydown capture + preventDefault 按键绝不泄漏）；`hud_window.rs`：2s 延迟预热常驻隐藏 `micro-hud` 窗口（IPC Spec §1）、`broadcast_summon` 唤醒广播、`HudVisibilityTracker`、3 测试；`lib.rs`：轮询线程 drain `HudSummonBus` → `pasteflow://hud-summoned` 事件 + 面板置前、`cmd_hud_visible`/`cmd_hud_trigger`（槽位 0 → R4 主线程物化还原原文 `MaterializeReason::RestoreRaw`）；全链路：双击 ⌘C⌘C → Re-own + HUD 弹出 | ✅ 3/3 |
+| **P2-7** | `dist/dashboard.html`：880×600 主面板（左侧导航 200px + 内容区 680px），Tab 1 滤镜商店（4 角色预设 + 双列配方卡片 + plainTextPolicy 下拉 + llm_stream 安全审查弹窗「确认信任并导入」UI Spec §5.1）、Tab 2 诊断看板（changeCount / 今日转换 / p95 / FormatGate G1A–G5 柱状分布 / 最近 20 条回调日志 / 一键导出脱敏诊断包）、Tab 3 设置（Tier 1 权限开关含风险说明 + L3 BYOK 配置 + Ollama 探测）；`dashboard_window.rs`：按需创建 + 关闭 30s destroy（`DashboardTracker` 倒计时调度/取消）、`DiagnosticCounters`（gate 计数 + 20 条日志截断 + p50/p95/p99 nearest-rank 分位数）、脱敏导出（断言无 rawPlainText/contentHash）；`lib.rs`：托盘菜单「打开剪贴板历史/诊断看板」打开主面板、`cmd_get_diagnostic_snapshot`/`cmd_export_sanitized_report`；8 测试（测试驱动修复：percentile 改 nearest-rank、HistoryDb 无 count_all → recent(500) 统计） | ✅ 8/8 |
 
-**P2 测试门禁**：236 全绿（lib 195 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
+**P2 测试门禁**：243 全绿（lib 202 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。**P2 交互层代码全部收口**。
 
-**下一步**：P2-7 主面板（Tab 1 滤镜商店 / Tab 2 诊断看板 / Tab 3 设置）→ 真机冒烟（双击 ⌘C⌘C 弹出 HUD）+ S8-E2E 按键吞吐。
+**下一步**：真机冒烟（双击 ⌘C⌘C 弹 HUD + 主面板三 Tab）→ S8-E2E 按键吞吐（待辅助功能授权）→ P3（L3 流式 / 补齐 L1 滤镜 / 发布链路）。
 
 ---
 
@@ -207,6 +208,17 @@
 | **P3-3** | **补齐 3 个 L1 滤镜**：【网页牛皮癣洗白】、【PDF 断行缝合】、【开发者瑞士军刀】 | §5.1 / §10.2 | `l1_snapshots` 新增语料覆盖；各滤镜快照断言通过 |
 | **P3-4** | **全量 E2E 回归**：§8.5 两层兼容性体系复跑（CI AST/样式快照 + 真机 9 行 checklist）；§11.4 诊断看板与脱敏周报导出验收 | §8.5 / §11.4 | 全绿；`served_history_log` 变体标签齐全 |
 | **P3-5** | **发布链路**：Apple Developer ID 签名 + `notarytool` 公证（D3）、Universal `.dmg`、GitHub Releases、Homebrew Cask、Tauri Updater、README（How We Work 技术叙事，§1.2 纪律） | §11.1–11.2 | Gatekeeper 拦截消除；包体 < 10MB |
+
+**P3 进度明细（按执行顺序回写）**
+
+| 任务 | 交付内容 | 测试 |
+|---|---|---|
+| **P3-1 核心** | `l3.rs`：L3 流式引擎状态机（`L3Session` Idle/Streaming/Cancelled/Completed/Failed，`feed`/`cancel` 即时熔断/`finish`）、`LlmConfig::validate()`（本地 Ollama 允许空 Key，未配置 → `L3_CONFIG_MISSING`）、`L3Provider` trait（网络层抽象 + FakeProvider 测试桩）、`AtomicPastePayload` 一次性原子粘贴（首块 < 600ms 红线断言）、`L3Recipes::with_builtin()` 四内置提示词（会议纪要/对比表格/待办清单 + 得体打工人润色，含「不得虚构」安全前缀，防 Prompt Injection）、`run_l3()`（validate → DLP 防护 → 流式聚合）、`probe_ollama()` | ✅ 11/11 |
+| **P3-3** | `filters/web_cleaner.rs`【网页牛皮癣洗白】：剥离 style/class/id 属性、冗余 span、版权尾巴（©/版权所有/阅读原文/关注我们）、脚注编号，空行收敛，OnceLock 预编译正则；`filters/pdf_reflow.rs`【PDF 断行缝合】：跨行连字符合并 → 句末标点保段 → 软回车缝合（CJK 边界不插空格）→ 空行收敛；`filters/dev_swiss.rs`【开发者瑞士军刀】（`PASSTHROUGH` + `MANUAL_ONLY`）：JSON 格式化/转 TS·Go·Python·Rust 类型、curl→fetch、Unix 时间戳→ISO 8601（秒/毫秒自适应）、JWT 解码（标注 NOT verified）、Base64 解码（UTF-8 优先 + 二进制 hex 回退）；`Cargo.toml` 补 `base64`/`time` 依赖 | ✅ 26/26 |
+
+**P3 测试门禁**：280 全绿（lib 239 + guardrails 21 + hotkey_registry 9 + l1_snapshots 11）。
+
+**下一步**：P3-1 收尾（L3 真实 HTTP SSE 网络层 + `cmd_run_l3_stream`/`cmd_cancel_l3_stream` IPC 接线 + HUD 流式预览 UI）→ P3-2（贪吃蛇智能汇总 HUD 闭环 + 得体打工人滤镜卡片）→ P3-3 验收补齐 `l1_snapshots` 新增 3 滤镜语料快照 → P3-4 全量 E2E 回归 → P3-5 发布链路（前置：D6 品牌名裁决 + D3 Developer ID）。
 
 ### 4.2 🏁 v0.1.5 发布里程碑出口标准
 
